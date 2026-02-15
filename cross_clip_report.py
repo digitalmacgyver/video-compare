@@ -114,7 +114,12 @@ HTML_CSS = """
   @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
   .heatmap { width: 100%; border-collapse: collapse; font-size: 0.85em; }
   .heatmap th { background: #21262d; padding: 6px 5px; text-align: center; font-weight: 600;
-    border: 1px solid var(--border); white-space: nowrap; position: sticky; top: 0; z-index: 2; }
+    border: 1px solid var(--border); white-space: nowrap; position: sticky; top: 0; z-index: 2;
+    cursor: pointer; user-select: none; }
+  .heatmap th:hover { background: #2d333b; }
+  .heatmap th::after { content: ' \\2195'; opacity: 0.3; font-size: 0.8em; }
+  .heatmap th.sort-asc::after { content: ' \\2191'; opacity: 0.8; }
+  .heatmap th.sort-desc::after { content: ' \\2193'; opacity: 0.8; }
   .heatmap th:first-child { text-align: left; min-width: 140px; }
   .heatmap .th-tech { border-bottom: 2px solid var(--tech-accent); }
   .heatmap .th-perc { border-bottom: 2px solid var(--perc-accent); }
@@ -294,7 +299,7 @@ def generate_crossclip_html(all_data, clip_labels):
     </thead>
     <tbody></tbody>
   </table>
-  <p class="legend-note">Cells show average rank across all {n_clip} clips (1 = best). Color: green = consistently good, red = consistently poor.</p>
+  <p class="legend-note">Cells show average rank across all {n_clip} clips (1 = best). Color: green = consistently good, red = consistently poor. Click any column header to sort.</p>
 </div>
 
 <script>
@@ -366,6 +371,23 @@ consistData.forEach(row => {{
     tr.appendChild(td);
   }});
   ctbody.appendChild(tr);
+}});
+
+document.querySelectorAll('.heatmap th').forEach((th,colIdx)=>{{
+  th.addEventListener('click',()=>{{
+    const table=th.closest('table'),tbody=table.querySelector('tbody');
+    const rows=Array.from(tbody.querySelectorAll('tr'));
+    const asc=!th.classList.contains('sort-asc');
+    table.querySelectorAll('th').forEach(h=>h.classList.remove('sort-asc','sort-desc'));
+    th.classList.add(asc?'sort-asc':'sort-desc');
+    rows.sort((a,b)=>{{
+      const av=a.cells[colIdx].textContent,bv=b.cells[colIdx].textContent;
+      const an=parseFloat(av),bn=parseFloat(bv);
+      if(!isNaN(an)&&!isNaN(bn)) return asc?an-bn:bn-an;
+      return asc?av.localeCompare(bv):bv.localeCompare(av);
+    }});
+    rows.forEach(r=>tbody.appendChild(r));
+  }});
 }});
 </script>
 </body>

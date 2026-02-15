@@ -500,7 +500,12 @@ HTML_CSS = """
   .metric-card.perc-card { border-color: #3d2b5e; }
   .heatmap { width: 100%; border-collapse: collapse; font-size: 0.85em; }
   .heatmap th { background: #21262d; padding: 6px 5px; text-align: center; font-weight: 600;
-    border: 1px solid var(--border); white-space: nowrap; position: sticky; top: 0; z-index: 2; }
+    border: 1px solid var(--border); white-space: nowrap; position: sticky; top: 0; z-index: 2;
+    cursor: pointer; user-select: none; }
+  .heatmap th:hover { background: #2d333b; }
+  .heatmap th::after { content: ' \\2195'; opacity: 0.3; font-size: 0.8em; }
+  .heatmap th.sort-asc::after { content: ' \\2191'; opacity: 0.8; }
+  .heatmap th.sort-desc::after { content: ' \\2193'; opacity: 0.8; }
   .heatmap th:first-child { text-align: left; min-width: 140px; }
   .heatmap .th-tech { border-bottom: 2px solid var(--tech-accent); }
   .heatmap .th-perc { border-bottom: 2px solid var(--perc-accent); }
@@ -672,7 +677,7 @@ def generate_html(data, title="Video Quality Report"):
     </tr></thead>
     <tbody></tbody>
   </table>
-  <p class="legend-note">Ranked by overall composite. Cell color: green = good, red = poor (z-score). Raw metric values shown.</p>
+  <p class="legend-note">Ranked by overall composite. Cell color: green = good, red = poor (z-score). Raw metric values shown. Click any column header to sort.</p>
 </div>
 
 <h2>Technical Metric Rankings</h2>
@@ -751,6 +756,28 @@ const amd={json.dumps(per_metric)};
         plugins:{{legend:{{display:false}},title:{{display:true,text:md.label+' '+dir,color:group==='perc'?'#d2a8ff':'#e6edf3',font:{{size:14}}}},tooltip:{{callbacks:{{label:c=>md.unit+': '+c.parsed.x.toFixed(6)}}}}}},
         scales:{{x:{{grid:{{color:'#30363d'}},ticks:{{color:'#8b949e'}}}},y:{{grid:{{display:false}},ticks:{{color:'#e6edf3',font:{{size:10}}}}}}}}
       }}
+    }});
+  }});
+}});
+
+document.querySelectorAll('.heatmap th').forEach((th,colIdx)=>{{
+  th.addEventListener('click',()=>{{
+    const table=th.closest('table'),tbody=table.querySelector('tbody');
+    const rows=Array.from(tbody.querySelectorAll('tr'));
+    const asc=!th.classList.contains('sort-asc');
+    table.querySelectorAll('th').forEach(h=>h.classList.remove('sort-asc','sort-desc'));
+    th.classList.add(asc?'sort-asc':'sort-desc');
+    rows.sort((a,b)=>{{
+      const av=a.cells[colIdx].textContent.replace(/^#\\d+\\s*/,'');
+      const bv=b.cells[colIdx].textContent.replace(/^#\\d+\\s*/,'');
+      const an=parseFloat(av),bn=parseFloat(bv);
+      if(!isNaN(an)&&!isNaN(bn)) return asc?an-bn:bn-an;
+      return asc?av.localeCompare(bv):bv.localeCompare(av);
+    }});
+    rows.forEach((r,i)=>{{
+      const fc=r.cells[0],name=fc.textContent.replace(/^#\\d+\\s*/,'');
+      fc.innerHTML='<span class="rank">#'+(i+1)+'</span> '+name;
+      tbody.appendChild(r);
     }});
   }});
 }});
