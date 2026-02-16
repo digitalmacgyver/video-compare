@@ -707,6 +707,53 @@ HTML_CSS = """
   .lb-overlay .lb-caption { color: #e6edf3; font-size: 0.9em; margin-top: 12px;
     text-align: center; max-width: 90vw; }
   .lb-toggle:checked + label.lb-overlay { display: flex; }
+  /* A/B Comparison Slider */
+  .cmp-card { position: relative; }
+  .cmp-btn {
+    position: absolute; top: 8px; right: 8px; width: 32px; height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.55); color: #ccc; border-radius: 6px;
+    cursor: pointer; font-size: 18px; z-index: 10; user-select: none;
+    transition: background 0.15s, color 0.15s;
+  }
+  .cmp-btn:hover { background: rgba(30,90,200,0.8); color: #fff; }
+  .cmp-card.cmp-selected { outline: 2px solid var(--accent); }
+  .cmp-card.cmp-selected .cmp-btn { background: var(--accent); color: #fff; }
+  .cmp-toast {
+    display: none; position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: #1f6feb; color: #fff; padding: 10px 24px; border-radius: 8px;
+    font-size: 0.95em; z-index: 10000; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    pointer-events: none;
+  }
+  .ab-overlay {
+    display: none; position: fixed; inset: 0; background: #000; z-index: 9999;
+    flex-direction: column; align-items: center; justify-content: center;
+  }
+  .ab-viewport {
+    position: relative; max-width: 95vw; max-height: 85vh;
+    overflow: hidden; cursor: col-resize; touch-action: none;
+  }
+  .ab-viewport img { display: block; max-width: 95vw; max-height: 85vh; object-fit: contain; }
+  .ab-img-b {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    overflow: hidden; clip-path: inset(0 0 0 50%);
+  }
+  .ab-img-b img { display: block; max-width: 95vw; max-height: 85vh; object-fit: contain; }
+  .ab-divider {
+    position: absolute; top: 0; left: 50%; width: 3px; height: 100%;
+    background: #fff; pointer-events: none; z-index: 2;
+  }
+  .ab-divider::after {
+    content: ''; position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%,-50%); width: 28px; height: 28px;
+    border: 2px solid #fff; border-radius: 50%; background: rgba(0,0,0,0.5);
+  }
+  .ab-labels {
+    display: flex; gap: 20px; margin-bottom: 8px; font-size: 0.85em;
+    color: #aaa; z-index: 2;
+  }
+  .ab-labels span { padding: 2px 10px; border-radius: 4px; background: rgba(255,255,255,0.1); }
+  .ab-close-hint { margin-top: 10px; font-size: 0.8em; color: #666; z-index: 2; }
 """
 
 
@@ -923,7 +970,8 @@ document.querySelectorAll('.heatmap th').forEach((th,colIdx)=>{{
     if comparisons:
         html += """<h2>Visual Metric Comparisons</h2>
 <p class="subtitle">For each metric, a strong example frame from the best-scoring clip (near its 90th percentile)
-is shown. All clips are shown at the same frame number for direct comparison. Click any image to enlarge.</p>
+is shown. All clips are shown at the same frame number for direct comparison.
+Click any image to enlarge; use the <span style="display:inline-block;width:20px;height:20px;background:rgba(0,0,0,0.55);border-radius:4px;text-align:center;line-height:20px;font-size:12px;vertical-align:middle;">&#9643;</span> icon to A/B compare two images with a slider.</p>
 """
         for key in ALL_KEYS:
             if key not in comparisons:
@@ -951,7 +999,8 @@ is shown. All clips are shown at the same frame number for direct comparison. Cl
                     img_src = f"data:image/jpeg;base64,{fdata['jpeg_b64']}"
                     caption = f"#{rank} {name} &mdash; {label}: {fdata['value']:.6f} &mdash; Frame {comp['frame_num']}"
                     lb_overlays.append((lb_id, img_src, caption))
-                    html += f"""  <div class="card" style="flex:1;min-width:300px;max-width:48%;">
+                    html += f"""  <div class="card cmp-card" style="flex:1;min-width:300px;max-width:48%;">
+    <div class="cmp-btn" data-cmp-caption="#{rank} {name} &mdash; {label}: {fdata['value']:.6f}">&#9643;</div>
     <div style="font-weight:600;margin-bottom:4px;"><span class="rank">#{rank}</span> {name}</div>
     <div style="font-size:0.9em;color:var(--text-dim);margin-bottom:8px;">{label}: {fdata["value"]:.6f}</div>
     <label for="lb{lb_id}" class="lb-thumb"><img src="{img_src}" style="width:100%;border-radius:4px;"></label>
@@ -987,6 +1036,113 @@ is shown. All clips are shown at the same frame number for direct comparison. Cl
         for lid, img_src, caption in lb_overlays:
             html += f'<input type="checkbox" id="lb{lid}" class="lb-toggle">'
             html += f'<label for="lb{lid}" class="lb-overlay"><img src="{img_src}"><div class="lb-caption">{caption}</div></label>\n'
+
+    # A/B comparison slider (only when comparison frames exist)
+    if comparisons:
+        html += """
+<!-- A/B Comparison Slider -->
+<div class="cmp-toast" id="cmpToast">Select another image to compare</div>
+<div class="ab-overlay" id="abOverlay">
+  <div class="ab-labels"><span id="abLabelA">A</span><span id="abLabelB">B</span></div>
+  <div class="ab-viewport" id="abViewport">
+    <img id="abImgA" src="" alt="A">
+    <div class="ab-img-b" id="abClipB"><img id="abImgB" src="" alt="B"></div>
+    <div class="ab-divider" id="abDivider"></div>
+  </div>
+  <div class="ab-close-hint">Click or press Escape to close</div>
+</div>
+<script>
+(function(){
+  var selectedA = null;
+  var toast = document.getElementById('cmpToast');
+  var overlay = document.getElementById('abOverlay');
+  var viewport = document.getElementById('abViewport');
+  var imgA = document.getElementById('abImgA');
+  var imgB = document.getElementById('abImgB');
+  var clipB = document.getElementById('abClipB');
+  var divider = document.getElementById('abDivider');
+  var labelA = document.getElementById('abLabelA');
+  var labelB = document.getElementById('abLabelB');
+
+  function clearSelection() {
+    if (selectedA) selectedA.el.classList.remove('cmp-selected');
+    selectedA = null;
+    toast.style.display = 'none';
+  }
+
+  function getSrc(btn) {
+    return btn.closest('.cmp-card').querySelector('img').src;
+  }
+
+  function updateSlider(pct) {
+    clipB.style.clipPath = 'inset(0 0 0 ' + pct + '%)';
+    divider.style.left = pct + '%';
+  }
+
+  function openAB(srcA, captA, srcB, captB) {
+    imgA.src = srcA; imgB.src = srcB;
+    labelA.textContent = 'A: ' + captA;
+    labelB.textContent = 'B: ' + captB;
+    updateSlider(50);
+    overlay.style.display = 'flex';
+    clearSelection();
+  }
+
+  function closeAB() { overlay.style.display = 'none'; }
+
+  document.querySelectorAll('.cmp-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var src = getSrc(btn);
+      var caption = btn.getAttribute('data-cmp-caption');
+      if (!selectedA) {
+        selectedA = { el: btn.closest('.cmp-card'), src: src, caption: caption };
+        selectedA.el.classList.add('cmp-selected');
+        toast.style.display = 'block';
+      } else if (selectedA.el === btn.closest('.cmp-card')) {
+        clearSelection();
+      } else {
+        openAB(selectedA.src, selectedA.caption, src, caption);
+      }
+    });
+  });
+
+  viewport.addEventListener('mousemove', function(e) {
+    var rect = viewport.getBoundingClientRect();
+    var pct = ((e.clientX - rect.left) / rect.width) * 100;
+    pct = Math.max(0, Math.min(100, pct));
+    updateSlider(pct);
+  });
+
+  var touchStartX = 0, touchStartY = 0;
+  viewport.addEventListener('touchstart', function(e) {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+  viewport.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    var rect = viewport.getBoundingClientRect();
+    var pct = ((e.touches[0].clientX - rect.left) / rect.width) * 100;
+    pct = Math.max(0, Math.min(100, pct));
+    updateSlider(pct);
+  }, { passive: false });
+  viewport.addEventListener('touchend', function(e) {
+    var dx = e.changedTouches[0].clientX - touchStartX;
+    var dy = e.changedTouches[0].clientY - touchStartY;
+    if (Math.sqrt(dx*dx + dy*dy) < 10) closeAB();
+  });
+
+  viewport.addEventListener('click', function() { closeAB(); });
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      if (overlay.style.display === 'flex') closeAB();
+      else clearSelection();
+    }
+  });
+})();
+</script>
+"""
 
     html += "</body>\n</html>"
 

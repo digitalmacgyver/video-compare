@@ -1,15 +1,10 @@
 # Video Compare
 
-No-reference quality metrics for comparing analog video capture pipelines.
-
-Analyzes normalized ProRes 422 HQ clips (10-bit yuv422p10le, resolution auto-detected) on 9 quality metrics:
-sharpness, edge strength, blocking, detail, texture quality, ringing, temporal stability, colorfulness, naturalness.
-
-Dropped from earlier versions: noise (subordinate to detail, r=0.83), contrast & tonal richness (near-zero discrimination across devices), gradient smoothness (duplicate of texture quality, r=0.94). Ringing is retained despite high correlation with sharpness (r=0.94) because it measures a distinct analog artifact — edge overshoot from VCR sharpness circuits and aperture correction — that varies independently across hardware.
+No-reference quality metrics for comparing analog video capture pipelines. Analyzes normalized ProRes 422 HQ clips on 9 quality metrics, producing interactive HTML reports with Chart.js visualizations, per-metric comparison frames with A/B slider, and sortable heatmaps.
 
 ## Example Report
 
-[View a sample report](https://digitalmacgyver.github.io/video-compare/example_report/) comparing 10 VCR/TBC configurations capturing the same source material, with interactive charts, per-metric comparison frames, and a sortable heatmap.
+[View a sample report](https://digitalmacgyver.github.io/video-compare/example_report/) comparing 14 VCR/TBC configurations capturing the same source material.
 
 ## Workflow
 
@@ -39,7 +34,7 @@ Options:
   --output-dir DIR    Output directory (default: <src_dir>/normalized/)
 ```
 
-Frame rate is auto-detected from source clips via ffprobe. Output format is ProRes 422 HQ.
+Frame rate and resolution are auto-detected from source clips via ffprobe. Output format is ProRes 422 HQ.
 
 ### Step 2: Quality Report
 
@@ -65,16 +60,14 @@ python quality_report.py /path/to/normalized/ --skip jvctbc1:1 --screenshots 5
 
 **Always produces:**
 - `<name>.json` — raw metric data (used by cross_clip_report.py)
-- `<name>.html` — interactive HTML report with Chart.js visualizations, per-metric comparison frames with click-to-enlarge lightbox
+- `<name>.html` — interactive HTML report with Chart.js visualizations, per-metric comparison frames with click-to-enlarge lightbox and A/B comparison slider
 
 **Optionally produces:**
 - `<name>.txt` — plain-text report with rankings (with `--text`)
 
 Use `--pattern` to select specific file subsets in a directory:
 ```bash
-# Only analyze .mp4 files with a specific suffix
 python quality_report.py /path/to/normalized/ --pattern "*_sls.mp4" --name sls_report
-python quality_report.py /path/to/normalized/ --pattern "*_starlight_mini.mp4" --name starlight_mini_report
 ```
 
 ### Step 3: Cross-Clip Comparison (Optional)
@@ -108,6 +101,12 @@ Runs ffprobe signalstats on normalized clips and prints a convergence table to v
 | Naturalness | MSCN kurtosis | Higher = better |
 
 The overall composite uses rank-based scoring: each clip is ranked 1 (best) to N (worst) per metric, and the overall score is the average rank across all 9 metrics. Equal weight, no single metric can dominate.
+
+## Approach
+
+Clips are first normalized to remove brightness and saturation differences between capture devices, isolating image quality from color balance. Nine complementary metrics were selected to cover sharpness, detail preservation, artifact detection, temporal behavior, color, and naturalness. Metrics with high inter-correlation or near-zero discrimination were excluded during development to avoid redundant scoring. Ringing is the one exception — despite correlating with sharpness, it captures a distinct analog artifact (edge overshoot from VCR sharpness circuits and aperture correction) that varies independently across hardware.
+
+The HTML report includes per-metric comparison frames showing all clips at the same frame number, selected near the 90th percentile of the best-scoring clip for each metric. An inline A/B comparison slider lets you directly compare any two images side-by-side.
 
 ## Requirements
 
