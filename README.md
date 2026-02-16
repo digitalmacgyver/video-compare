@@ -2,8 +2,8 @@
 
 No-reference quality metrics for comparing analog video capture pipelines.
 
-Analyzes normalized ProRes 422 HQ clips (576x436, 10-bit yuv422p10le) on 12 metrics:
-- **7 Technical**: sharpness, edge strength, noise, blocking, detail, ringing, temporal stability
+Analyzes normalized ProRes 422 HQ clips (10-bit yuv422p10le, resolution auto-detected) on 13 metrics:
+- **8 Technical**: sharpness, edge strength, noise, blocking, detail, texture quality, ringing, temporal stability
 - **5 Perceptual**: contrast, colorfulness, tonal richness, naturalness, gradient smoothness
 
 ## Workflow
@@ -48,11 +48,19 @@ Options:
   --name PREFIX       Report filename prefix (default: "quality_report")
   --pattern GLOB      File glob pattern (default: "*.mov")
   --text              Also generate a plain-text report
+  --screenshots N     Embed N evenly-spaced sample frames per clip in HTML (default: 0)
+  --skip PATTERN:N    Skip N initial frames for clips matching PATTERN (repeatable)
+```
+
+The `--skip` option handles timing misalignment between capture devices. PATTERN is matched as a substring of the clip filename:
+```bash
+# Skip 1 frame of JVC clips to align with DS555 clips
+python quality_report.py /path/to/normalized/ --skip jvctbc1:1 --screenshots 5
 ```
 
 **Always produces:**
 - `<name>.json` — raw metric data (used by cross_clip_report.py)
-- `<name>.html` — interactive HTML report with Chart.js visualizations
+- `<name>.html` — interactive HTML report with Chart.js visualizations, per-metric comparison frames with click-to-enlarge lightbox
 
 **Optionally produces:**
 - `<name>.txt` — plain-text report with rankings (with `--text`)
@@ -89,6 +97,7 @@ Runs ffprobe signalstats on normalized clips and prints a convergence table to v
 | Noise | Flat-region high-freq energy | Lower = better |
 | Blocking | 8x8 DCT boundary ratio | Closer to 1.0 = better |
 | Detail | Local variance median (16x16) | Higher = better |
+| Texture Quality | Structure/noise ratio | Higher = better |
 | Ringing | Near-edge Laplacian energy | Lower = better |
 | Temporal Stability | Frame-to-frame diff mean | Lower = better |
 | Contrast | RMS contrast | Higher = better |
@@ -97,7 +106,7 @@ Runs ffprobe signalstats on normalized clips and prints a convergence table to v
 | Naturalness | MSCN kurtosis | Higher = better |
 | Gradient Smoothness | Gradient continuity | Higher = better |
 
-Composite scores use z-score normalization with equal weighting of technical and perceptual sub-composites.
+Composite scores use discrimination-weighted z-score normalization. Metrics with more spread across devices receive more influence. Technical and perceptual sub-composites are weighted equally in the overall score.
 
 ## Requirements
 

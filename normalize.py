@@ -29,17 +29,22 @@ import glob
 import json
 import numpy as np
 
-# === Video format constants ===
-WIDTH = 576
-HEIGHT = 436
+# === Pixel format constants ===
 BIT_DEPTH = 10
 MAX_VAL = (1 << BIT_DEPTH) - 1   # 1023
 NEUTRAL = 1 << (BIT_DEPTH - 1)    # 512
 
-Y_SIZE = WIDTH * HEIGHT
-U_SIZE = (WIDTH // 2) * HEIGHT
-V_SIZE = U_SIZE
-FRAME_BYTES = (Y_SIZE + U_SIZE + V_SIZE) * 2  # 16-bit samples
+
+def probe_video(filepath):
+    """Get video width and height via ffprobe."""
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "csv=p=0", filepath
+    ]
+    result = subprocess.check_output(cmd, text=True).strip()
+    w, h = result.split(",")
+    return int(w), int(h)
 
 
 def detect_frame_rate(filepath):
@@ -76,12 +81,12 @@ def decode_command(filepath):
     ]
 
 
-def encode_command(filepath, frame_rate):
+def encode_command(filepath, width, height, frame_rate):
     """Build ffmpeg encode command that reads raw yuv422p10le from pipe."""
     return [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-f", "rawvideo", "-pix_fmt", "yuv422p10le",
-        "-s", f"{WIDTH}x{HEIGHT}",
+        "-s", f"{width}x{height}",
         "-r", frame_rate,
         "-i", "pipe:0",
         "-c:v", "prores_ks", "-profile:v", "3",  # ProRes 422 HQ
@@ -91,15 +96,18 @@ def encode_command(filepath, frame_rate):
     ]
 
 
-def read_frame(pipe):
+def read_frame(pipe, width, height):
     """Read one raw YUV422p10le frame from pipe. Returns (Y, U, V) or None."""
-    data = pipe.read(FRAME_BYTES)
-    if len(data) < FRAME_BYTES:
+    y_size = width * height
+    u_size = (width // 2) * height
+    frame_bytes = (y_size + u_size + u_size) * 2  # 16-bit samples
+    data = pipe.read(frame_bytes)
+    if len(data) < frame_bytes:
         return None
     raw = np.frombuffer(data, dtype=np.uint16)
-    y = raw[:Y_SIZE].reshape(HEIGHT, WIDTH)
-    u = raw[Y_SIZE:Y_SIZE + U_SIZE].reshape(HEIGHT, WIDTH // 2)
-    v = raw[Y_SIZE + U_SIZE:].reshape(HEIGHT, WIDTH // 2)
+    y = raw[:y_size].reshape(height, width)
+    u = raw[y_size:y_size + u_size].reshape(height, width // 2)
+    v = raw[y_size + u_size:].reshape(height, width // 2)
     return y, u, v
 
 
@@ -110,7 +118,7 @@ def write_frame(pipe, y, u, v):
     pipe.write(v.tobytes())
 
 
-def compute_reference_stats(ref_path):
+def compute_reference_stats(ref_path, width, height):
     """Compute reference clip's average Y histogram CDF and mean chroma saturation."""
     print(f"  Computing reference stats from: {os.path.basename(ref_path)}")
     proc = subprocess.Popen(decode_command(ref_path), stdout=subprocess.PIPE)
@@ -121,7 +129,7 @@ def compute_reference_stats(ref_path):
     n_frames = 0
 
     while True:
-        frame = read_frame(proc.stdout)
+        frame = read_frame(proc.stdout, width, height)
         if frame is None:
             break
         y, u, v = frame
@@ -158,7 +166,7 @@ def build_lut(src_cdf, ref_cdf):
     return lut
 
 
-def normalize_clip(src_path, out_path, ref_cdf, ref_mean_sat, frame_rate):
+def normalize_clip(src_path, out_path, ref_cdf, ref_mean_sat, width, height, frame_rate):
     """Normalize one clip: histogram-match Y, scale chroma saturation."""
     clip_name = os.path.basename(src_path)
     print(f"  Processing: {clip_name}")
@@ -171,7 +179,7 @@ def normalize_clip(src_path, out_path, ref_cdf, ref_mean_sat, frame_rate):
     n_frames = 0
 
     while True:
-        frame = read_frame(proc_r.stdout)
+        frame = read_frame(proc_r.stdout, width, height)
         if frame is None:
             break
         y, u, v = frame
@@ -203,11 +211,11 @@ def normalize_clip(src_path, out_path, ref_cdf, ref_mean_sat, frame_rate):
 
     # Second pass: apply LUT and chroma scaling, encode output
     proc_dec = subprocess.Popen(decode_command(src_path), stdout=subprocess.PIPE)
-    proc_enc = subprocess.Popen(encode_command(out_path, frame_rate), stdin=subprocess.PIPE)
+    proc_enc = subprocess.Popen(encode_command(out_path, width, height, frame_rate), stdin=subprocess.PIPE)
 
     frame_num = 0
     while True:
-        frame = read_frame(proc_dec.stdout)
+        frame = read_frame(proc_dec.stdout, width, height)
         if frame is None:
             break
         y, u, v = frame
@@ -253,6 +261,19 @@ def main():
 
     print(f"Found {len(clips)} clips in {src_dir}")
 
+    # Auto-detect resolution and validate all clips match
+    resolutions = {}
+    for clip_path in clips:
+        resolutions[clip_path] = probe_video(clip_path)
+    res_set = set(resolutions.values())
+    if len(res_set) > 1:
+        print("ERROR: Not all clips have the same resolution:")
+        for path, (w, h) in resolutions.items():
+            print(f"  {w}x{h}: {os.path.basename(path)}")
+        sys.exit(1)
+    vid_w, vid_h = res_set.pop()
+    print(f"Resolution: {vid_w}x{vid_h}")
+
     # Pick reference clip
     if args.reference:
         ref_path = os.path.join(src_dir, args.reference)
@@ -269,7 +290,7 @@ def main():
 
     # Compute reference statistics
     print("\n=== Computing Reference Statistics ===")
-    ref_cdf, ref_mean_sat, ref_frames = compute_reference_stats(ref_path)
+    ref_cdf, ref_mean_sat, ref_frames = compute_reference_stats(ref_path, vid_w, vid_h)
 
     # Normalize all clips
     print(f"\n=== Normalizing {len(clips)} Clips ===")
@@ -279,7 +300,7 @@ def main():
         out_path = os.path.join(out_dir, out_name)
 
         print(f"\n[{i}/{len(clips)}]")
-        if not normalize_clip(clip_path, out_path, ref_cdf, ref_mean_sat, frame_rate):
+        if not normalize_clip(clip_path, out_path, ref_cdf, ref_mean_sat, vid_w, vid_h, frame_rate):
             print(f"  FAILED: {clip_name}")
             continue
 

@@ -22,7 +22,7 @@ import numpy as np
 # METRIC METADATA (shared with quality_report.py)
 # =====================================================================
 
-TECH_KEYS = ["sharpness", "edge_strength", "noise", "blocking", "detail", "ringing", "temporal_stability"]
+TECH_KEYS = ["sharpness", "edge_strength", "noise", "blocking", "detail", "texture_quality", "ringing", "temporal_stability"]
 PERC_KEYS = ["contrast", "colorfulness", "tonal_richness", "naturalness", "grad_smoothness"]
 ALL_KEYS = TECH_KEYS + PERC_KEYS
 
@@ -32,6 +32,7 @@ METRIC_INFO = {
     "noise":              ("Noise",          "flat-region est.",     False, "tech"),
     "blocking":           ("Blocking",       "8x8 grid ratio",      None,  "tech"),
     "detail":             ("Detail",         "local var median",     True,  "tech"),
+    "texture_quality":    ("Texture Q",      "structure ratio",      True,  "tech"),
     "ringing":            ("Ringing",        "edge overshoot",       False, "tech"),
     "temporal_stability": ("Temporal",       "frame diff mean",      False, "tech"),
     "contrast":           ("Contrast",       "RMS contrast",         True,  "perc"),
@@ -53,27 +54,43 @@ CLIP_COLORS = ["#58a6ff", "#3fb950", "#f58231", "#e6194b", "#911eb4",
 # =====================================================================
 
 def compute_composites(data):
-    """Compute technical, perceptual, and overall composite z-scores."""
+    """Compute discrimination-weighted technical, perceptual, and overall composite z-scores.
+
+    Each metric's z-score is weighted by its coefficient of variation (relative spread
+    across clips). Metrics where all clips score similarly contribute less to rankings.
+    Weights are normalized within tech/perc groups so total weight = number of metrics.
+    """
     clip_names = sorted(data.keys())
     n = len(clip_names)
 
     zscores = {}
+    raw_weights = {}
     for key in ALL_KEYS:
         arr = np.array([data[c][key]["mean"] for c in clip_names])
         mu, sigma = np.mean(arr), np.std(arr)
         zscores[key] = (arr - mu) / sigma if sigma > 1e-15 else np.zeros(n)
+        abs_mu = max(abs(float(mu)), float(sigma), 1e-10)
+        raw_weights[key] = float(sigma) / abs_mu
+
+    weights = dict(raw_weights)
+    for group_keys in [TECH_KEYS, PERC_KEYS]:
+        total_w = sum(weights[k] for k in group_keys)
+        if total_w > 0:
+            scale = len(group_keys) / total_w
+            for k in group_keys:
+                weights[k] *= scale
 
     tech = np.zeros(n)
-    for k in ["sharpness", "edge_strength", "detail"]:
-        tech += zscores[k]
+    for k in ["sharpness", "edge_strength", "detail", "texture_quality"]:
+        tech += weights[k] * zscores[k]
     for k in ["noise", "ringing", "temporal_stability"]:
-        tech -= zscores[k]
+        tech -= weights[k] * zscores[k]
     blocking_dist = np.abs(np.array([data[c]["blocking"]["mean"] for c in clip_names]) - 1.0)
-    mu, sigma = np.mean(blocking_dist), np.std(blocking_dist)
-    if sigma > 1e-15:
-        tech -= (blocking_dist - mu) / sigma
+    bd_mu, bd_sigma = np.mean(blocking_dist), np.std(blocking_dist)
+    if bd_sigma > 1e-15:
+        tech -= weights["blocking"] * (blocking_dist - bd_mu) / bd_sigma
 
-    perc = sum(zscores[k] for k in PERC_KEYS)
+    perc = sum(weights[k] * zscores[k] for k in PERC_KEYS)
 
     tc_mu, tc_sig = np.mean(tech), np.std(tech)
     pc_mu, pc_sig = np.mean(perc), np.std(perc)
