@@ -84,6 +84,15 @@ METRIC_INFO = {
     "naturalness":        ("Naturalness",    "MSCN kurtosis",        True),
 }
 
+CMP_ICON_SVG = ('<svg viewBox="0 0 24 24" width="20" height="20" fill="none" '
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round">'
+    '<rect x="2" y="3" width="20" height="18" rx="2"/>'
+    '<line x1="12" y1="3" x2="12" y2="21"/>'
+    '<text x="7" y="15.5" text-anchor="middle" fill="currentColor" stroke="none" '
+    'font-size="8" font-family="sans-serif" font-weight="bold">A</text>'
+    '<text x="17" y="15.5" text-anchor="middle" fill="currentColor" stroke="none" '
+    'font-size="8" font-family="sans-serif" font-weight="bold">B</text></svg>')
+
 COLORS_7  = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#42d4f4", "#f58231", "#911eb4"]
 COLORS_14 = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4", "#42d4f4",
              "#f032e6", "#bfef45", "#fabed4", "#469990", "#dcbeff", "#9A6324", "#800000"]
@@ -710,10 +719,10 @@ HTML_CSS = """
   /* A/B Comparison Slider */
   .cmp-card { position: relative; }
   .cmp-btn {
-    position: absolute; top: 8px; right: 8px; width: 32px; height: 32px;
+    position: absolute; top: 8px; right: 8px; width: 36px; height: 36px;
     display: flex; align-items: center; justify-content: center;
-    background: rgba(0,0,0,0.55); color: #ccc; border-radius: 6px;
-    cursor: pointer; font-size: 18px; z-index: 10; user-select: none;
+    background: rgba(0,0,0,0.6); color: #ccc; border-radius: 6px;
+    cursor: pointer; z-index: 10; user-select: none; line-height: 0;
     transition: background 0.15s, color 0.15s;
   }
   .cmp-btn:hover { background: rgba(30,90,200,0.8); color: #fff; }
@@ -971,7 +980,7 @@ document.querySelectorAll('.heatmap th').forEach((th,colIdx)=>{{
         html += """<h2>Visual Metric Comparisons</h2>
 <p class="subtitle">For each metric, a strong example frame from the best-scoring clip (near its 90th percentile)
 is shown. All clips are shown at the same frame number for direct comparison.
-Click any image to enlarge; use the <span style="display:inline-block;width:20px;height:20px;background:rgba(0,0,0,0.55);border-radius:4px;text-align:center;line-height:20px;font-size:12px;vertical-align:middle;">&#9643;</span> icon to A/B compare two images with a slider.</p>
+Click any image to enlarge; use the <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:rgba(0,0,0,0.55);border-radius:4px;vertical-align:middle;color:#ccc;">""" + CMP_ICON_SVG.replace('width="20" height="20"', 'width="16" height="16"') + """</span> icon to A/B compare two images with a slider.</p>
 """
         for key in ALL_KEYS:
             if key not in comparisons:
@@ -1000,7 +1009,7 @@ Click any image to enlarge; use the <span style="display:inline-block;width:20px
                     caption = f"#{rank} {name} &mdash; {label}: {fdata['value']:.6f} &mdash; Frame {comp['frame_num']}"
                     lb_overlays.append((lb_id, img_src, caption))
                     html += f"""  <div class="card cmp-card" style="flex:1;min-width:300px;max-width:48%;">
-    <div class="cmp-btn" data-cmp-caption="#{rank} {name} &mdash; {label}: {fdata['value']:.6f}">&#9643;</div>
+    <div class="cmp-btn" data-cmp-caption="#{rank} {name} &mdash; {label}: {fdata['value']:.6f}">{CMP_ICON_SVG}</div>
     <div style="font-weight:600;margin-bottom:4px;"><span class="rank">#{rank}</span> {name}</div>
     <div style="font-size:0.9em;color:var(--text-dim);margin-bottom:8px;">{label}: {fdata["value"]:.6f}</div>
     <label for="lb{lb_id}" class="lb-thumb"><img src="{img_src}" style="width:100%;border-radius:4px;"></label>
