@@ -42,7 +42,9 @@ python cross_clip_report.py report1.json report2.json --output comparison.html
 - OpenCV headless does NOT include `cv2.quality` (no BRISQUE/NIQE)
 - Noise estimation uses flat-region approach (Sobel gradient < 0.03) to avoid confusing blur with low noise
 - MSCN kurtosis used instead of GGD beta fitting (beta~2.0 for all ProRes clips, no discrimination)
-- 13 metrics: 8 technical + 5 perceptual; discrimination-weighted composite scores
+- 9 metrics with rank-based overall composite (average rank across all metrics, equal weight)
+- Dropped metrics: noise (r=0.83 with detail), contrast/tonal_richness (near-zero discrimination), grad_smoothness (r=0.94 with texture_quality)
+- Ringing retained despite r=0.94 with sharpness — distinct analog artifact (VCR sharpness circuits, aperture correction)
 - Comparison frames use p90 percentile selection from the best-scoring clip per metric
 - CSS-only lightbox (checkbox hack) for click-to-enlarge on all embedded images
 

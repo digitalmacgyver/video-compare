@@ -22,9 +22,15 @@ Examples:
     python quality_report.py /path/to/normalized/ --pattern "*_sls.mp4" --name sls_report
     python quality_report.py /path/to/normalized/ --text
 
-Metrics (13 total):
-  Technical (8): sharpness, edge strength, noise, blocking, detail, texture quality, ringing, temporal
-  Perceptual (5): contrast, colorfulness, tonal richness, naturalness, gradient smoothness
+Metrics (9 total):
+  Sharpness, edge strength, blocking, detail, texture quality, ringing, temporal stability,
+  colorfulness, naturalness
+
+Dropped metrics: noise (subordinate to detail — correlated r=0.83), contrast and tonal richness
+(near-zero discrimination across clips), gradient smoothness (r=0.94 duplicate of texture quality).
+Ringing retained despite r=0.94 correlation with sharpness — it measures a distinct analog artifact
+(edge overshoot from VCR sharpness circuits / aperture correction) that varies independently of
+true edge definition across capture hardware.
 """
 
 import argparse
@@ -58,24 +64,24 @@ def probe_video(filepath):
 # METRIC METADATA
 # =====================================================================
 
-TECH_KEYS = ["sharpness", "edge_strength", "noise", "blocking", "detail", "texture_quality", "ringing", "temporal_stability"]
-PERC_KEYS = ["contrast", "colorfulness", "tonal_richness", "naturalness", "grad_smoothness"]
-ALL_KEYS = TECH_KEYS + PERC_KEYS
+ALL_KEYS = [
+    "sharpness", "edge_strength", "blocking", "detail", "texture_quality",
+    "ringing", "temporal_stability", "colorfulness", "naturalness",
+]
+
+# Metrics still computed but excluded from scoring (low discrimination or redundant)
+_DROPPED_KEYS = ["noise", "contrast", "tonal_richness", "grad_smoothness"]
 
 METRIC_INFO = {
-    "sharpness":          ("Sharpness",      "Laplacian var",       True,  "tech"),
-    "edge_strength":      ("Edge Strength",  "Sobel mean",          True,  "tech"),
-    "noise":              ("Noise",          "flat-region est.",     False, "tech"),
-    "blocking":           ("Blocking",       "8x8 grid ratio",      None,  "tech"),
-    "detail":             ("Detail",         "local var median",     True,  "tech"),
-    "texture_quality":    ("Texture Q",      "structure ratio",      True,  "tech"),
-    "ringing":            ("Ringing",        "edge overshoot",       False, "tech"),
-    "temporal_stability": ("Temporal",       "frame diff mean",      False, "tech"),
-    "contrast":           ("Contrast",       "RMS contrast",         True,  "perc"),
-    "colorfulness":       ("Colorfulness",   "Hasler-S. M",          True,  "perc"),
-    "tonal_richness":     ("Tonal Richness", "Y entropy (bits)",     True,  "perc"),
-    "naturalness":        ("Naturalness",    "MSCN kurtosis",        True,  "perc"),
-    "grad_smoothness":    ("Grad Smooth",    "gradient smoothness",  True,  "perc"),
+    "sharpness":          ("Sharpness",      "Laplacian var",       True),
+    "edge_strength":      ("Edge Strength",  "Sobel mean",          True),
+    "blocking":           ("Blocking",       "8x8 grid ratio",      None),
+    "detail":             ("Detail",         "local var median",     True),
+    "texture_quality":    ("Texture Q",      "structure ratio",      True),
+    "ringing":            ("Ringing",        "edge overshoot",       False),
+    "temporal_stability": ("Temporal",       "frame diff mean",      False),
+    "colorfulness":       ("Colorfulness",   "Hasler-S. M",          True),
+    "naturalness":        ("Naturalness",    "MSCN kurtosis",        True),
 }
 
 COLORS_7  = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#42d4f4", "#f58231", "#911eb4"]
@@ -346,16 +352,12 @@ def analyze_clip(filepath, width, height, skip_frames=0):
 
         accum["sharpness"].append(sharpness_laplacian(yf))
         accum["edge_strength"].append(edge_strength_sobel(yf))
-        accum["noise"].append(noise_estimate(yf))
         accum["blocking"].append(blocking_artifact_measure(yf))
         accum["detail"].append(detail_texture(yf))
         accum["texture_quality"].append(texture_quality_measure(yf))
         accum["ringing"].append(ringing_measure(yf))
-        accum["contrast"].append(perceptual_contrast(yf))
         accum["colorfulness"].append(colorfulness_metric(u, v))
-        accum["tonal_richness"].append(tonal_richness(yf))
         accum["naturalness"].append(naturalness_nss(yf))
-        accum["grad_smoothness"].append(gradient_smoothness(yf))
 
         if prev_yf is not None:
             temporal_diffs.append(np.mean(np.abs(yf - prev_yf)))
@@ -417,7 +419,7 @@ def find_comparison_frames(clip_paths, clip_names, all_perframe, all_results, sk
     """
     comparisons = {}
     for key in ALL_KEYS:
-        _, _, higher_better, _ = METRIC_INFO[key]
+        _, _, higher_better = METRIC_INFO[key]
 
         # (a) Find the clip with the best overall score for this metric
         best_clip = None
@@ -508,54 +510,50 @@ def extract_sample_screenshots(clip_paths, clip_names, n_screenshots, skip_offse
 # =====================================================================
 
 def compute_composites(data):
-    """Compute discrimination-weighted technical, perceptual, and overall composite z-scores.
+    """Compute rank-based overall composite scores.
 
-    Each metric's z-score is weighted by its coefficient of variation (relative spread
-    across clips). Metrics where all clips score similarly contribute less to rankings.
-    Weights are normalized within tech/perc groups so total weight = number of metrics.
+    For each metric, clips are ranked 1 (best) to N (worst). The overall
+    score is the average rank across all 9 metrics — lower is better.
+    Z-scores are also computed for heatmap cell coloring (positive = good).
     """
     clip_names = sorted(data.keys())
     n = len(clip_names)
 
+    # Z-scores for heatmap cell coloring (sign-flipped so positive = good)
     zscores = {}
-    raw_weights = {}
     for key in ALL_KEYS:
         arr = np.array([data[c][key]["mean"] for c in clip_names])
         mu, sigma = np.mean(arr), np.std(arr)
-        zscores[key] = (arr - mu) / sigma if sigma > 1e-15 else np.zeros(n)
-        # Discrimination weight: CV (relative spread). Use max(|mu|, sigma) as
-        # denominator to handle near-zero means gracefully.
-        abs_mu = max(abs(float(mu)), float(sigma), 1e-10)
-        raw_weights[key] = float(sigma) / abs_mu
+        zs = (arr - mu) / sigma if sigma > 1e-15 else np.zeros(n)
+        _, _, hb = METRIC_INFO[key]
+        if hb is False:
+            zs = -zs
+        elif hb is None:
+            dist = np.abs(arr - 1.0)
+            d_mu, d_sigma = np.mean(dist), np.std(dist)
+            zs = -(dist - d_mu) / d_sigma if d_sigma > 1e-15 else np.zeros(n)
+        zscores[key] = zs
 
-    # Normalize weights within each group so total weight = number of metrics in group
-    weights = dict(raw_weights)
-    for group_keys in [TECH_KEYS, PERC_KEYS]:
-        total_w = sum(weights[k] for k in group_keys)
-        if total_w > 0:
-            scale = len(group_keys) / total_w
-            for k in group_keys:
-                weights[k] *= scale
+    # Ranks per metric (1 = best, N = worst)
+    ranks = {}
+    for key in ALL_KEYS:
+        arr = np.array([data[c][key]["mean"] for c in clip_names])
+        _, _, hb = METRIC_INFO[key]
+        if hb is True:
+            order = np.argsort(-arr)
+        elif hb is False:
+            order = np.argsort(arr)
+        else:
+            order = np.argsort(np.abs(arr - 1.0))
+        rank_arr = np.empty(n, dtype=float)
+        for r, idx in enumerate(order, 1):
+            rank_arr[idx] = r
+        ranks[key] = rank_arr
 
-    tech = np.zeros(n)
-    for k in ["sharpness", "edge_strength", "detail", "texture_quality"]:
-        tech += weights[k] * zscores[k]
-    for k in ["noise", "ringing", "temporal_stability"]:
-        tech -= weights[k] * zscores[k]
-    blocking_dist = np.abs(np.array([data[c]["blocking"]["mean"] for c in clip_names]) - 1.0)
-    bd_mu, bd_sigma = np.mean(blocking_dist), np.std(blocking_dist)
-    if bd_sigma > 1e-15:
-        tech -= weights["blocking"] * (blocking_dist - bd_mu) / bd_sigma
+    avg_ranks = np.mean([ranks[k] for k in ALL_KEYS], axis=0)
 
-    perc = sum(weights[k] * zscores[k] for k in PERC_KEYS)
-
-    tc_mu, tc_sig = np.mean(tech), np.std(tech)
-    pc_mu, pc_sig = np.mean(perc), np.std(perc)
-    tech_norm = (tech - tc_mu) / tc_sig if tc_sig > 1e-15 else np.zeros(n)
-    perc_norm = (perc - pc_mu) / pc_sig if pc_sig > 1e-15 else np.zeros(n)
-    overall = tech_norm + perc_norm
-
-    return {c: {"tech": float(tech[i]), "perc": float(perc[i]), "overall": float(overall[i]),
+    return {c: {"overall": float(avg_ranks[i]),
+                "ranks": {k: int(ranks[k][i]) for k in ALL_KEYS},
                 "zscores": {k: float(zscores[k][i]) for k in ALL_KEYS}}
             for i, c in enumerate(clip_names)}
 
@@ -578,10 +576,8 @@ def format_text_report(all_results, src_dir):
     lines.append("")
 
     for label, keys, headers in [
-        ("Technical Metrics", TECH_KEYS,
-         ["Sharpness", "Edge Str", "Noise", "Blocking", "Detail", "TexQual", "Ringing", "Temporal"]),
-        ("Perceptual / Cinematic Metrics", PERC_KEYS,
-         ["Contrast", "Colorful", "TonalRich", "Natural", "GradSmooth"]),
+        ("Quality Metrics", ALL_KEYS,
+         ["Sharpness", "Edge Str", "Blocking", "Detail", "TexQual", "Ringing", "Temporal", "Colorful", "Natural"]),
     ]:
         lines.append(f"--- {label} ---")
         header = f"{'Clip':<{col_w}}" + "".join(f" {h:>10}" for h in headers)
@@ -607,21 +603,16 @@ def format_text_report(all_results, src_dir):
     lines.append("RANKINGS (best to worst per metric)")
     lines.append("=" * 120)
 
-    for key, label, higher_better in [
-        ("sharpness", "Sharpness (higher = better)", True),
-        ("edge_strength", "Edge Strength (higher = better)", True),
-        ("noise", "Noise Level (lower = better)", False),
-        ("blocking", "Blocking Artifacts (closer to 1.0 = better)", None),
-        ("detail", "Detail Preservation (higher = better)", True),
-        ("texture_quality", "Texture Quality / Structure Ratio (higher = better)", True),
-        ("ringing", "Ringing/Haloing (lower = better)", False),
-        ("temporal_stability", "Temporal Stability (lower = better)", False),
-        ("contrast", "Perceptual Contrast (higher = better)", True),
-        ("colorfulness", "Colorfulness (higher = better)", True),
-        ("tonal_richness", "Tonal Richness (higher = better)", True),
-        ("naturalness", "Naturalness / MSCN Kurtosis (higher = better)", True),
-        ("grad_smoothness", "Gradient Smoothness (higher = better)", True),
-    ]:
+    for key in ALL_KEYS:
+        label, unit, higher_better = METRIC_INFO[key]
+        if higher_better is True:
+            dir_str = "(higher = better)"
+        elif higher_better is False:
+            dir_str = "(lower = better)"
+        else:
+            dir_str = "(closer to 1.0 = better)"
+        label = f"{label} {dir_str}"
+        higher_better = higher_better  # used below
         lines.append(f"\n  {label}:")
         items = [(n, all_results[n][key]["mean"]) for n in clip_names]
         if higher_better is None:
@@ -637,19 +628,14 @@ def format_text_report(all_results, src_dir):
     # Composite rankings
     composites = compute_composites(all_results)
 
-    for title, score_key in [
-        ("TECHNICAL QUALITY RANKING", "tech"),
-        ("PERCEPTUAL / CINEMATIC RANKING", "perc"),
-        ("OVERALL COMPOSITE RANKING (Technical + Perceptual)", "overall"),
-    ]:
-        lines.append("")
-        lines.append("=" * 120)
-        lines.append(title)
-        lines.append("=" * 120)
-        lines.append("")
-        ranked = sorted(clip_names, key=lambda c: -composites[c][score_key])
-        for rank, name in enumerate(ranked, 1):
-            lines.append(f"  {rank:>2}. {name:<{col_w}} {score_key} z-score: {composites[name][score_key]:>+.3f}")
+    lines.append("")
+    lines.append("=" * 120)
+    lines.append("OVERALL COMPOSITE RANKING")
+    lines.append("=" * 120)
+    lines.append("")
+    ranked = sorted(clip_names, key=lambda c: composites[c]["overall"])
+    for rank, name in enumerate(ranked, 1):
+        lines.append(f"  {rank:>2}. {name:<{col_w}} avg rank: {composites[name]['overall']:.1f}")
 
     lines.append("")
     lines.append("=" * 120)
@@ -665,7 +651,7 @@ HTML_CSS = """
     --bg: #0d1117; --card: #161b22; --border: #30363d;
     --text: #e6edf3; --text-dim: #8b949e; --accent: #58a6ff;
     --good: #3fb950; --bad: #f85149; --mid: #d29922;
-    --perc-accent: #d2a8ff; --tech-accent: #58a6ff;
+    --accent2: #d2a8ff;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -674,7 +660,7 @@ HTML_CSS = """
   }
   h1 { font-size: 1.8em; margin-bottom: 8px; }
   h2 { font-size: 1.3em; margin: 40px 0 16px; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
-  h2.perc { color: var(--perc-accent); }
+  h2.alt { color: var(--accent2); }
   h3 { font-size: 1.1em; margin: 20px 0 12px; color: var(--text-dim); }
   .subtitle { color: var(--text-dim); margin-bottom: 24px; font-size: 0.95em; }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 24px; }
@@ -686,7 +672,6 @@ HTML_CSS = """
   .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 20px; }
   .metric-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
   .metric-card canvas { height: 300px !important; }
-  .metric-card.perc-card { border-color: #3d2b5e; }
   .heatmap { width: 100%; border-collapse: collapse; font-size: 0.85em; }
   .heatmap th { background: #21262d; padding: 6px 5px; text-align: center; font-weight: 600;
     border: 1px solid var(--border); white-space: nowrap; position: sticky; top: 0; z-index: 2;
@@ -696,8 +681,7 @@ HTML_CSS = """
   .heatmap th.sort-asc::after { content: ' \\2191'; opacity: 0.8; }
   .heatmap th.sort-desc::after { content: ' \\2193'; opacity: 0.8; }
   .heatmap th:first-child { text-align: left; min-width: 140px; }
-  .heatmap .th-tech { border-bottom: 2px solid var(--tech-accent); }
-  .heatmap .th-perc { border-bottom: 2px solid var(--perc-accent); }
+  .heatmap th { border-bottom: 2px solid var(--accent); }
   .heatmap td { padding: 5px 6px; text-align: center; border: 1px solid var(--border);
     font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 0.92em; }
   .heatmap td:first-child { text-align: left; font-weight: 500; }
@@ -711,10 +695,6 @@ HTML_CSS = """
   .dir-up { background: #1a3a2a; color: var(--good); }
   .dir-down { background: #3a1a1a; color: var(--bad); }
   .dir-mid { background: #3a2e1a; color: var(--mid); }
-  .section-label { display: inline-block; font-size: 0.75em; padding: 2px 8px; border-radius: 4px;
-    margin-bottom: 8px; font-weight: 600; letter-spacing: 0.5px; }
-  .section-label.tech { background: #1a2a3a; color: var(--tech-accent); }
-  .section-label.perc { background: #2a1a3a; color: var(--perc-accent); }
   /* Lightbox — CSS-only click-to-enlarge */
   .lb-toggle { display: none; }
   .lb-thumb { cursor: zoom-in; display: block; }
@@ -738,9 +718,7 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
     colors = {c: palette[i % len(palette)] for i, c in enumerate(clip_names)}
 
     composites = compute_composites(data)
-    ranked_overall = sorted(clip_names, key=lambda c: -composites[c]["overall"])
-    ranked_tech = sorted(clip_names, key=lambda c: -composites[c]["tech"])
-    ranked_perc = sorted(clip_names, key=lambda c: -composites[c]["perc"])
+    ranked_overall = sorted(clip_names, key=lambda c: composites[c]["overall"])
 
     # Radar: normalize each metric to 0-100
     radar_scores = {}
@@ -751,7 +729,7 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
             mn, mx = min(vals), max(vals)
             rng = mx - mn if mx - mn > 1e-15 else 1e-15
             raw = data[c][key]["mean"]
-            _, _, hb, _ = METRIC_INFO[key]
+            _, _, hb = METRIC_INFO[key]
             if hb is True:
                 sc.append(((raw - mn) / rng) * 100)
             elif hb is False:
@@ -766,13 +744,12 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
     hm_data = []
     for c in ranked_overall:
         cells = [{"raw": data[c][k]["mean"], "z": composites[c]["zscores"][k], "key": k} for k in ALL_KEYS]
-        hm_data.append({"name": c, "tech": composites[c]["tech"],
-                        "perc": composites[c]["perc"], "overall": composites[c]["overall"], "cells": cells})
+        hm_data.append({"name": c, "overall": composites[c]["overall"], "cells": cells})
 
     # Per-metric rankings
     per_metric = {}
     for key in ALL_KEYS:
-        _, _, hb, group = METRIC_INFO[key]
+        _, _, hb = METRIC_INFO[key]
         items = [(c, data[c][key]["mean"]) for c in clip_names]
         if hb is None:
             items.sort(key=lambda x: abs(x[1] - 1.0))
@@ -784,12 +761,8 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
             "labels": [c for c, _ in items], "values": [v for _, v in items],
             "colors": [colors[c] for c, _ in items],
             "label": METRIC_INFO[key][0], "unit": METRIC_INFO[key][1],
-            "higher_better": hb, "group": group
+            "higher_better": hb
         }
-
-    # Scatter points
-    scatter_points = [{"x": composites[c]["tech"], "y": composites[c]["perc"],
-                       "label": c, "color": colors[c]} for c in clip_names]
 
     # Radar datasets
     radar_datasets = [{"label": c, "data": radar_scores[c], "borderColor": colors[c],
@@ -813,57 +786,31 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
 <h1>{title}</h1>
 <p class="subtitle">
   {n} analog video captures — normalized to common brightness &amp; saturation —
-  evaluated on 8 technical + 5 perceptual no-reference metrics.
+  evaluated on 9 no-reference quality metrics.
 </p>
 
 <div class="card">
   <h3>Metric Guide</h3>
-  <span class="section-label tech">TECHNICAL / ARTIFACT</span>
-  <div class="metric-guide" style="margin-bottom:16px;">
+  <div class="metric-guide">
     <div><span class="mg-label">Sharpness</span> <span class="dir dir-up">higher</span><br>Laplacian variance — blur vs. sharpness</div>
     <div><span class="mg-label">Edge Strength</span> <span class="dir dir-up">higher</span><br>Sobel gradient — edge definition</div>
-    <div><span class="mg-label">Noise</span> <span class="dir dir-down">lower</span><br>High-freq energy in flat patches</div>
     <div><span class="mg-label">Blocking</span> <span class="dir dir-mid">~1.0</span><br>8x8 DCT boundary ratio</div>
     <div><span class="mg-label">Detail</span> <span class="dir dir-up">higher</span><br>Local variance — micro-detail</div>
     <div><span class="mg-label">Texture Q</span> <span class="dir dir-up">higher</span><br>Structure/noise ratio — detail quality</div>
-    <div><span class="mg-label">Ringing</span> <span class="dir dir-down">lower</span><br>Edge overshoot / haloing</div>
+    <div><span class="mg-label">Ringing</span> <span class="dir dir-down">lower</span><br>Edge overshoot / haloing — retained despite high sharpness correlation; reflects a distinct analog artifact (VCR sharpness circuits, aperture correction) that varies independently across hardware</div>
     <div><span class="mg-label">Temporal</span> <span class="dir dir-down">lower</span><br>Frame-to-frame diff — flicker</div>
-  </div>
-  <span class="section-label perc">PERCEPTUAL / CINEMATIC</span>
-  <div class="metric-guide">
-    <div><span class="mg-label">Contrast</span> <span class="dir dir-up">higher</span><br>RMS contrast — tonal punch</div>
     <div><span class="mg-label">Colorfulness</span> <span class="dir dir-up">higher</span><br>Hasler-S&uuml;sstrunk — color vibrancy</div>
-    <div><span class="mg-label">Tonal Richness</span> <span class="dir dir-up">higher</span><br>Histogram entropy — smooth gradations</div>
     <div><span class="mg-label">Naturalness</span> <span class="dir dir-up">higher</span><br>MSCN kurtosis — natural signal statistics</div>
-    <div><span class="mg-label">Grad Smoothness</span> <span class="dir dir-up">higher</span><br>Gradient continuity — anti-banding</div>
   </div>
 </div>
 
-<h2>Overall Composite Ranking (Technical + Perceptual)</h2>
+<h2>Overall Composite Ranking</h2>
 <div class="card">
   <div class="chart-container" style="height:{bar_height}px;"><canvas id="overallChart"></canvas></div>
-  <p class="legend-note">Discrimination-weighted combination of technical and perceptual sub-scores. Metrics with more spread across devices get more influence.</p>
+  <p class="legend-note">Average rank across all 9 metrics (1 = best per metric). Lower average rank = better overall quality.</p>
 </div>
 
-<h2>Technical vs. Perceptual Quality</h2>
-<div class="card">
-  <div class="chart-container" style="height:500px;"><canvas id="scatterChart"></canvas></div>
-  <p class="legend-note">Upper-right = best on both dimensions. Each dot is one capture pipeline.</p>
-</div>
-
-<h2>Technical &amp; Perceptual Rankings</h2>
-<div class="two-col">
-  <div class="card">
-    <span class="section-label tech">TECHNICAL</span>
-    <div class="chart-container" style="height:{bar_height}px;"><canvas id="techChart"></canvas></div>
-  </div>
-  <div class="card">
-    <span class="section-label perc">PERCEPTUAL</span>
-    <div class="chart-container" style="height:{bar_height}px;"><canvas id="percChart"></canvas></div>
-  </div>
-</div>
-
-<h2>13-Metric Radar Comparison</h2>
+<h2>9-Metric Radar Comparison</h2>
 <div class="card">
   <div class="chart-container chart-radar"><canvas id="radarChart"></canvas></div>
   <p class="legend-note">All metrics on 0–100 quality scale (higher = better on all axes). Click legend to toggle.{" Top 5 shown by default." if n > 5 else ""}</p>
@@ -873,41 +820,28 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
 <div class="card" style="overflow-x:auto;">
   <table class="heatmap" id="heatmapTable">
     <thead><tr>
-      <th>Clip</th><th>Overall</th><th>Tech</th><th>Perc</th>
-      <th class="th-tech">Sharp</th><th class="th-tech">Edge</th><th class="th-tech">Noise</th><th class="th-tech">Block</th><th class="th-tech">Detail</th><th class="th-tech">TexQ</th><th class="th-tech">Ring</th><th class="th-tech">Temp</th>
-      <th class="th-perc">Contr</th><th class="th-perc">Color</th><th class="th-perc">Tonal</th><th class="th-perc">Natur</th><th class="th-perc">Grad</th>
+      <th>Clip</th><th>Avg Rank</th>
+      <th>Sharp</th><th>Edge</th><th>Block</th><th>Detail</th><th>TexQ</th><th>Ring</th><th>Temp</th><th>Color</th><th>Natur</th>
     </tr></thead>
     <tbody></tbody>
   </table>
-  <p class="legend-note">Ranked by overall composite. Cell color: green = good, red = poor (z-score). Raw metric values shown. Click any column header to sort.</p>
+  <p class="legend-note">Ranked by average rank across all metrics (lower = better). Cell color: green = good, red = poor. Raw metric values shown. Click any column header to sort.</p>
 </div>
 
-<h2>Technical Metric Rankings</h2>
-<div class="metric-grid" id="techMetricGrid"></div>
-<h2 class="perc">Perceptual / Cinematic Metric Rankings</h2>
-<div class="metric-grid" id="percMetricGrid"></div>
+<h2>Individual Metric Rankings</h2>
+<div class="metric-grid" id="metricGrid"></div>
 
 <script>
-function hbar(id, labels, scores, clrs, xlabel) {{
-  new Chart(document.getElementById(id), {{
-    type:'bar', data:{{ labels, datasets:[{{ data:scores, backgroundColor:clrs, borderColor:clrs, borderWidth:1, borderRadius:4 }}] }},
-    options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
-      plugins:{{ legend:{{display:false}}, tooltip:{{callbacks:{{label:c=>'z-score: '+c.parsed.x.toFixed(3)}}}} }},
-      scales:{{ x:{{grid:{{color:'#30363d'}},ticks:{{color:'#8b949e'}},title:{{display:!!xlabel,text:xlabel||'',color:'#8b949e'}}}}, y:{{grid:{{display:false}},ticks:{{color:'#e6edf3',font:{{size:11}}}}}} }}
-    }}
-  }});
-}}
-
-hbar('overallChart',{json.dumps([c for c in ranked_overall])},{json.dumps([composites[c]["overall"] for c in ranked_overall])},{json.dumps([colors[c] for c in ranked_overall])},'Overall Z-Score (higher = better)');
-hbar('techChart',{json.dumps([c for c in ranked_tech])},{json.dumps([composites[c]["tech"] for c in ranked_tech])},{json.dumps([colors[c] for c in ranked_tech])},'Technical Z-Score');
-hbar('percChart',{json.dumps([c for c in ranked_perc])},{json.dumps([composites[c]["perc"] for c in ranked_perc])},{json.dumps([colors[c] for c in ranked_perc])},'Perceptual Z-Score');
-
-new Chart(document.getElementById('scatterChart'),{{
-  type:'scatter',
-  data:{{datasets:{json.dumps(scatter_points)}.map(p=>({{label:p.label,data:[{{x:p.x,y:p.y}}],backgroundColor:p.color,borderColor:p.color,pointRadius:8,pointHoverRadius:11}}))}},
-  options:{{responsive:true,maintainAspectRatio:false,
-    plugins:{{legend:{{display:false}},tooltip:{{callbacks:{{label:c=>c.dataset.label+' (tech:'+c.parsed.x.toFixed(2)+', perc:'+c.parsed.y.toFixed(2)+')'}}}}}},
-    scales:{{x:{{grid:{{color:'#30363d'}},ticks:{{color:'#8b949e'}},title:{{display:true,text:'Technical Quality Z-Score →',color:'#58a6ff'}}}},y:{{grid:{{color:'#30363d'}},ticks:{{color:'#8b949e'}},title:{{display:true,text:'Perceptual Quality Z-Score →',color:'#d2a8ff'}}}}}}
+new Chart(document.getElementById('overallChart'), {{
+  type:'bar',
+  data:{{ labels:{json.dumps([c for c in ranked_overall])},
+    datasets:[{{ data:{json.dumps([round(n + 1 - composites[c]["overall"], 2) for c in ranked_overall])},
+      backgroundColor:{json.dumps([colors[c] for c in ranked_overall])},
+      borderColor:{json.dumps([colors[c] for c in ranked_overall])}, borderWidth:1, borderRadius:4 }}] }},
+  options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+    plugins:{{ legend:{{display:false}},
+      tooltip:{{callbacks:{{label:c=>{{const rank={json.dumps({c: round(composites[c]["overall"], 1) for c in ranked_overall})};return 'avg rank: '+rank[c.label]}}}}}} }},
+    scales:{{ x:{{min:0,max:{n},grid:{{color:'#30363d'}},ticks:{{color:'#8b949e'}},title:{{display:true,text:'Rank Score (higher = better)',color:'#8b949e'}}}}, y:{{grid:{{display:false}},ticks:{{color:'#e6edf3',font:{{size:11}}}}}} }}
   }}
 }});
 
@@ -927,12 +861,10 @@ hmData.forEach((row,idx)=>{{
   let td=document.createElement('td');
   td.innerHTML='<span class="rank">#'+(idx+1)+'</span> '+row.name;
   tr.appendChild(td);
-  [row.overall,row.tech,row.perc].forEach(val=>{{
-    td=document.createElement('td');td.textContent=val.toFixed(2);
-    const n=Math.max(-1,Math.min(1,val/5));
-    td.style.background=n>0?'rgba(63,185,80,'+(Math.abs(n)*0.4)+')':'rgba(248,81,73,'+(Math.abs(n)*0.4)+')';
-    td.style.fontWeight='600';tr.appendChild(td);
-  }});
+  td=document.createElement('td');td.textContent=row.overall.toFixed(1);
+  const mid=({n}+1)/2, ov=Math.max(-1,Math.min(1,(mid-row.overall)/mid));
+  td.style.background=ov>0?'rgba(63,185,80,'+(Math.abs(ov)*0.4)+')':'rgba(248,81,73,'+(Math.abs(ov)*0.4)+')';
+  td.style.fontWeight='600';tr.appendChild(td);
   row.cells.forEach(cell=>{{
     td=document.createElement('td');
     td.textContent=['blocking'].includes(cell.key)?cell.raw.toFixed(4):['colorfulness'].includes(cell.key)?cell.raw.toFixed(1):['naturalness'].includes(cell.key)?cell.raw.toFixed(3):cell.raw.toFixed(5);
@@ -944,21 +876,18 @@ hmData.forEach((row,idx)=>{{
 }});
 
 const amd={json.dumps(per_metric)};
-['techMetricGrid','percMetricGrid'].forEach(gridId=>{{
-  const grid=document.getElementById(gridId);
-  const group=gridId==='techMetricGrid'?'tech':'perc';
-  Object.entries(amd).filter(([,md])=>md.group===group).forEach(([key,md])=>{{
-    const card=document.createElement('div');
-    card.className=group==='perc'?'metric-card perc-card':'metric-card';
-    const canvas=document.createElement('canvas');card.appendChild(canvas);grid.appendChild(card);
-    const dir=md.higher_better===true?'(higher = better)':md.higher_better===false?'(lower = better)':'(closer to 1.0)';
-    new Chart(canvas,{{
-      type:'bar',data:{{labels:md.labels,datasets:[{{data:md.values,backgroundColor:md.colors.map(c=>c+'cc'),borderColor:md.colors,borderWidth:1,borderRadius:3}}]}},
-      options:{{indexAxis:'y',responsive:true,maintainAspectRatio:false,
-        plugins:{{legend:{{display:false}},title:{{display:true,text:md.label+' '+dir,color:group==='perc'?'#d2a8ff':'#e6edf3',font:{{size:14}}}},tooltip:{{callbacks:{{label:c=>md.unit+': '+c.parsed.x.toFixed(6)}}}}}},
-        scales:{{x:{{grid:{{color:'#30363d'}},ticks:{{color:'#8b949e'}}}},y:{{grid:{{display:false}},ticks:{{color:'#e6edf3',font:{{size:10}}}}}}}}
-      }}
-    }});
+const grid=document.getElementById('metricGrid');
+Object.entries(amd).forEach(([key,md])=>{{
+  const card=document.createElement('div');
+  card.className='metric-card';
+  const canvas=document.createElement('canvas');card.appendChild(canvas);grid.appendChild(card);
+  const dir=md.higher_better===true?'(higher = better)':md.higher_better===false?'(lower = better)':'(closer to 1.0)';
+  new Chart(canvas,{{
+    type:'bar',data:{{labels:md.labels,datasets:[{{data:md.values,backgroundColor:md.colors.map(c=>c+'cc'),borderColor:md.colors,borderWidth:1,borderRadius:3}}]}},
+    options:{{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+      plugins:{{legend:{{display:false}},title:{{display:true,text:md.label+' '+dir,color:'#e6edf3',font:{{size:14}}}},tooltip:{{callbacks:{{label:c=>md.unit+': '+c.parsed.x.toFixed(6)}}}}}},
+      scales:{{x:{{grid:{{color:'#30363d'}},ticks:{{color:'#8b949e'}}}},y:{{grid:{{display:false}},ticks:{{color:'#e6edf3',font:{{size:10}}}}}}}}
+    }}
   }});
 }});
 
@@ -1000,7 +929,7 @@ is shown. All clips are shown at the same frame number for direct comparison. Cl
             if key not in comparisons:
                 continue
             comp = comparisons[key]
-            label, unit, higher_better, group = METRIC_INFO[key]
+            label, unit, higher_better = METRIC_INFO[key]
             if higher_better is True:
                 direction = "(higher = better)"
             elif higher_better is False:
