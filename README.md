@@ -7,6 +7,10 @@ sharpness, edge strength, blocking, detail, texture quality, ringing, temporal s
 
 Dropped from earlier versions: noise (subordinate to detail, r=0.83), contrast & tonal richness (near-zero discrimination across devices), gradient smoothness (duplicate of texture quality, r=0.94). Ringing is retained despite high correlation with sharpness (r=0.94) because it measures a distinct analog artifact — edge overshoot from VCR sharpness circuits and aperture correction — that varies independently across hardware.
 
+## Example Report
+
+[View a sample report](https://digitalmacgyver.github.io/video-compare/example_report/) comparing 10 VCR/TBC configurations capturing the same source material, with interactive charts, per-metric comparison frames, and a sortable heatmap.
+
 ## Workflow
 
 ```bash
