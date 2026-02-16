@@ -1166,7 +1166,8 @@ def main():
                                              skip_offsets)
 
     # HTML output (always)
-    title = f"Video Quality Report — {os.path.basename(src_dir) or args.name}"
+    display_name = args.name.replace("_", " ").title() if args.name != "quality_report" else os.path.basename(src_dir)
+    title = f"Video Quality Report — {display_name}"
     html_path = os.path.join(output_dir, f"{args.name}.html")
     with open(html_path, "w") as f:
         f.write(generate_html(all_results, title, comparisons, samples))
