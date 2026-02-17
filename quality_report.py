@@ -434,6 +434,12 @@ def analyze_clip(filepath, width, height, skip_frames=0):
     else:
         result["temporal_stability"] = {"mean": 0.0, "std": 0.0}
 
+    # Suppress floating-point noise on ratio metrics (tiny means from mostly-zero per-frame values)
+    EPS = 1e-5
+    for k in ("crushed_blacks", "blown_whites"):
+        if result[k]["mean"] < EPS:
+            result[k]["mean"] = 0.0
+
     result["n_frames"] = n_frames
 
     # Per-frame arrays for all metrics (used for comparison screenshots)
@@ -632,7 +638,7 @@ def format_text_report(all_results, src_dir):
 
     for label, keys, headers in [
         ("Quality Metrics", ALL_KEYS,
-         ["Sharpness", "Edge Str", "Blocking", "Detail", "TexQual", "Ringing", "Temporal", "Colorful", "Natural"]),
+         ["Sharpness", "Edge Str", "Blocking", "Detail", "TexQual", "Ringing", "Temporal", "Colorful", "Natural", "CrBlack", "BlnWhite"]),
     ]:
         lines.append(f"--- {label} ---")
         header = f"{'Clip':<{col_w}}" + "".join(f" {h:>10}" for h in headers)
@@ -642,7 +648,9 @@ def format_text_report(all_results, src_dir):
             row = f"{name:<{col_w}}"
             for k in keys:
                 v = all_results[name][k]["mean"]
-                if k == "blocking":
+                if k in ("crushed_blacks", "blown_whites"):
+                    row += f" {v*100:>9.1f}%"
+                elif k == "blocking":
                     row += f" {v:>10.4f}"
                 elif k == "colorfulness":
                     row += f" {v:>10.2f}"
@@ -677,8 +685,11 @@ def format_text_report(all_results, src_dir):
         else:
             items.sort(key=lambda x: x[1])
         for rank, (name, val) in enumerate(items, 1):
-            fmt = ".4f" if key == "blocking" else ".2f" if key == "colorfulness" else ".4f" if key == "naturalness" else ".6f"
-            lines.append(f"    {rank:>2}. {name:<{col_w}} {val:{fmt}}")
+            if key in ("crushed_blacks", "blown_whites"):
+                lines.append(f"    {rank:>2}. {name:<{col_w}} {val*100:.1f}%")
+            else:
+                fmt = ".4f" if key == "blocking" else ".2f" if key == "colorfulness" else ".4f" if key == "naturalness" else ".6f"
+                lines.append(f"    {rank:>2}. {name:<{col_w}} {val:{fmt}}")
 
     # Composite rankings
     composites = compute_composites(all_results)
@@ -758,10 +769,12 @@ HTML_CSS = """
   .lb-overlay { display: none; position: fixed; inset: 0;
     background: #000; z-index: 9999; cursor: zoom-out;
     justify-content: center; align-items: center; flex-direction: column; padding: 20px; }
-  .lb-overlay img { max-width: 95vw; max-height: 85vh; object-fit: contain; border-radius: 4px; }
+  .lb-overlay img { max-width: 95vw; max-height: 85vh; object-fit: contain; border-radius: 4px;
+    transform-origin: 0 0; user-select: none; -webkit-user-drag: none; }
   .lb-overlay .lb-caption { color: #e6edf3; font-size: 0.9em; margin-top: 12px;
     text-align: center; max-width: 90vw; }
   .lb-toggle:checked + label.lb-overlay { display: flex; }
+  .lb-hint { color: #555; font-size: 0.75em; margin-top: 6px; }
   /* A/B Comparison Slider */
   .cmp-card { position: relative; }
   .cmp-btn {
@@ -787,8 +800,10 @@ HTML_CSS = """
   .ab-viewport {
     position: relative; max-width: 95vw; max-height: 85vh;
     overflow: hidden; cursor: col-resize; touch-action: none;
+    transform-origin: 0 0;
   }
-  .ab-viewport img { display: block; max-width: 95vw; max-height: 85vh; object-fit: contain; }
+  .ab-viewport img { display: block; max-width: 95vw; max-height: 85vh; object-fit: contain;
+    user-select: none; -webkit-user-drag: none; }
   .ab-img-b {
     position: absolute; top: 0; left: 0; width: 100%; height: 100%;
     overflow: hidden; clip-path: inset(0 0 0 50%);
@@ -859,11 +874,13 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
             items.sort(key=lambda x: -x[1])
         else:
             items.sort(key=lambda x: x[1])
+        is_pct = key in ("crushed_blacks", "blown_whites")
         per_metric[key] = {
-            "labels": [c for c, _ in items], "values": [v for _, v in items],
+            "labels": [c for c, _ in items],
+            "values": [v * 100 for _, v in items] if is_pct else [v for _, v in items],
             "colors": [colors[c] for c, _ in items],
             "label": METRIC_INFO[key][0], "unit": METRIC_INFO[key][1],
-            "higher_better": hb
+            "higher_better": hb, "is_pct": is_pct,
         }
 
     # Radar datasets
@@ -887,8 +904,8 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
 
 <h1>{title}</h1>
 <p class="subtitle">
-  {n} analog video captures — normalized to common brightness &amp; saturation —
-  evaluated on 9 no-reference quality metrics.
+  {n} analog video captures evaluated on 11 no-reference quality metrics
+  (all brightness-agnostic — no upstream normalization required).
 </p>
 
 <div class="card">
@@ -903,16 +920,18 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
     <div><span class="mg-label">Temporal</span> <span class="dir dir-down">lower</span><br>Frame-to-frame diff — flicker</div>
     <div><span class="mg-label">Colorfulness</span> <span class="dir dir-up">higher</span><br>Hasler-S&uuml;sstrunk — color vibrancy</div>
     <div><span class="mg-label">Naturalness</span> <span class="dir dir-up">higher</span><br>MSCN kurtosis — natural signal statistics</div>
+    <div><span class="mg-label">Crushed Blacks</span> <span class="dir dir-down">lower %</span><br>Shadow headroom — fraction of shadow pixels clipped to near-black</div>
+    <div><span class="mg-label">Blown Whites</span> <span class="dir dir-down">lower %</span><br>Highlight headroom — fraction of highlight pixels clipped to near-white</div>
   </div>
 </div>
 
 <h2>Overall Composite Ranking</h2>
 <div class="card">
   <div class="chart-container" style="height:{bar_height}px;"><canvas id="overallChart"></canvas></div>
-  <p class="legend-note">Average rank across all 9 metrics (1 = best per metric). Lower average rank = better overall quality.</p>
+  <p class="legend-note">Average rank across all 11 metrics (1 = best per metric). Lower average rank = better overall quality.</p>
 </div>
 
-<h2>9-Metric Radar Comparison</h2>
+<h2>11-Metric Radar Comparison</h2>
 <div class="card">
   <div class="chart-container chart-radar"><canvas id="radarChart"></canvas></div>
   <p class="legend-note">All metrics on 0–100 quality scale (higher = better on all axes). Click legend to toggle.{" Top 5 shown by default." if n > 5 else ""}</p>
@@ -923,11 +942,11 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
   <table class="heatmap" id="heatmapTable">
     <thead><tr>
       <th>Clip</th><th>Avg Rank</th>
-      <th>Sharp</th><th>Edge</th><th>Block</th><th>Detail</th><th>TexQ</th><th>Ring</th><th>Temp</th><th>Color</th><th>Natur</th>
+      <th>Sharp</th><th>Edge</th><th>Block</th><th>Detail</th><th>TexQ</th><th>Ring</th><th>Temp</th><th>Color</th><th>Natur</th><th>CrBlk</th><th>BlnWh</th>
     </tr></thead>
     <tbody></tbody>
   </table>
-  <p class="legend-note">Ranked by average rank across all metrics (lower = better). Cell color: green = good, red = poor. Raw metric values shown. Click any column header to sort.</p>
+  <p class="legend-note">Ranked by average rank across all 11 metrics (lower = better). Cell color: green = good, red = poor. Raw metric values shown; CrBlk/BlnWh as percentages. Click any column header to sort.</p>
 </div>
 
 <h2>Individual Metric Rankings</h2>
@@ -969,7 +988,7 @@ hmData.forEach((row,idx)=>{{
   td.style.fontWeight='600';tr.appendChild(td);
   row.cells.forEach(cell=>{{
     td=document.createElement('td');
-    td.textContent=['blocking'].includes(cell.key)?cell.raw.toFixed(4):['colorfulness'].includes(cell.key)?cell.raw.toFixed(1):['naturalness'].includes(cell.key)?cell.raw.toFixed(3):cell.raw.toFixed(5);
+    td.textContent=['crushed_blacks','blown_whites'].includes(cell.key)?(cell.raw*100).toFixed(1)+'%':['blocking'].includes(cell.key)?cell.raw.toFixed(4):['colorfulness'].includes(cell.key)?cell.raw.toFixed(1):['naturalness'].includes(cell.key)?cell.raw.toFixed(3):cell.raw.toFixed(5);
     const z=cell.z,n=Math.max(-1,Math.min(1,z/2.5));
     td.style.background=n>0?'rgba(63,185,80,'+(Math.abs(n)*0.35)+')':'rgba(248,81,73,'+(Math.abs(n)*0.35)+')';
     tr.appendChild(td);
@@ -987,7 +1006,7 @@ Object.entries(amd).forEach(([key,md])=>{{
   new Chart(canvas,{{
     type:'bar',data:{{labels:md.labels,datasets:[{{data:md.values,backgroundColor:md.colors.map(c=>c+'cc'),borderColor:md.colors,borderWidth:1,borderRadius:3}}]}},
     options:{{indexAxis:'y',responsive:true,maintainAspectRatio:false,
-      plugins:{{legend:{{display:false}},title:{{display:true,text:md.label+' '+dir,color:'#e6edf3',font:{{size:14}}}},tooltip:{{callbacks:{{label:c=>md.unit+': '+c.parsed.x.toFixed(6)}}}}}},
+      plugins:{{legend:{{display:false}},title:{{display:true,text:md.label+' '+dir,color:'#e6edf3',font:{{size:14}}}},tooltip:{{callbacks:{{label:c=>md.is_pct?c.parsed.x.toFixed(1)+'%':md.unit+': '+c.parsed.x.toFixed(6)}}}}}},
       scales:{{x:{{grid:{{color:'#30363d'}},ticks:{{color:'#8b949e'}}}},y:{{grid:{{display:false}},ticks:{{color:'#e6edf3',font:{{size:10}}}}}}}}
     }}
   }});
@@ -1049,15 +1068,17 @@ Click any image to enlarge; use the <span style="display:inline-flex;align-items
                 frame_items = sorted(comp["frames"].items(), key=lambda x: x[1]["value"])
             else:
                 frame_items = sorted(comp["frames"].items(), key=lambda x: abs(x[1]["value"] - 1.0))
+            is_pct = key in ("crushed_blacks", "blown_whites")
             for rank, (name, fdata) in enumerate(frame_items, 1):
                 if fdata["jpeg_b64"]:
                     img_src = f"data:image/jpeg;base64,{fdata['jpeg_b64']}"
-                    caption = f"#{rank} {name} &mdash; {label}: {fdata['value']:.6f} &mdash; Frame {comp['frame_num']}"
+                    vfmt = f"{fdata['value']*100:.1f}%" if is_pct else f"{fdata['value']:.6f}"
+                    caption = f"#{rank} {name} &mdash; {label}: {vfmt} &mdash; Frame {comp['frame_num']}"
                     lb_overlays.append((lb_id, img_src, caption))
                     html += f"""  <div class="card cmp-card" style="flex:1;min-width:300px;max-width:48%;">
-    <div class="cmp-btn" data-cmp-caption="#{rank} {name} &mdash; {label}: {fdata['value']:.6f}">{CMP_ICON_SVG}</div>
+    <div class="cmp-btn" data-cmp-caption="#{rank} {name} &mdash; {label}: {vfmt}">{CMP_ICON_SVG}</div>
     <div style="font-weight:600;margin-bottom:4px;"><span class="rank">#{rank}</span> {name}</div>
-    <div style="font-size:0.9em;color:var(--text-dim);margin-bottom:8px;">{label}: {fdata["value"]:.6f}</div>
+    <div style="font-size:0.9em;color:var(--text-dim);margin-bottom:8px;">{label}: {vfmt}</div>
     <label for="lb{lb_id}" class="lb-thumb"><img src="{img_src}" style="width:100%;border-radius:4px;"></label>
   </div>
 """
@@ -1090,7 +1111,145 @@ Click any image to enlarge; use the <span style="display:inline-flex;align-items
         html += '\n<!-- Lightbox overlays (document root to avoid stacking context clipping) -->\n'
         for lid, img_src, caption in lb_overlays:
             html += f'<input type="checkbox" id="lb{lid}" class="lb-toggle">'
-            html += f'<label for="lb{lid}" class="lb-overlay"><img src="{img_src}"><div class="lb-caption">{caption}</div></label>\n'
+            html += f'<label for="lb{lid}" class="lb-overlay"><img src="{img_src}"><div class="lb-caption">{caption}</div><div class="lb-hint">Scroll to zoom &middot; Drag to pan &middot; R to reset &middot; Click to close</div></label>\n'
+
+    # Lightbox zoom/pan script (works for all lightbox images)
+    if lb_overlays:
+        html += """
+<script>
+(function(){
+  var scale=1,tx=0,ty=0,dragging=false,lastX=0,lastY=0;
+
+  function getActive(){
+    var chk=document.querySelector('.lb-toggle:checked');
+    if(!chk) return null;
+    return chk.nextElementSibling;
+  }
+  function getImg(){
+    var ov=getActive();
+    return ov?ov.querySelector('img'):null;
+  }
+  function apply(img){
+    img.style.transform='translate('+tx+'px,'+ty+'px) scale('+scale+')';
+    img.style.cursor=scale>1?'grab':'zoom-in';
+  }
+  function resetZoom(){
+    scale=1;tx=0;ty=0;
+    var img=getImg();
+    if(img){img.style.transform='';img.style.cursor='zoom-in';}
+  }
+
+  /* Wheel zoom — zoom toward cursor */
+  document.addEventListener('wheel',function(e){
+    var img=getImg();
+    if(!img) return;
+    e.preventDefault();
+    var rect=img.getBoundingClientRect();
+    var oldS=scale;
+    scale=Math.max(1,Math.min(15,scale*(e.deltaY<0?1.15:1/1.15)));
+    if(scale===1){resetZoom();return;}
+    var ratio=scale/oldS;
+    tx=(1-ratio)*(e.clientX-rect.left)+tx;
+    ty=(1-ratio)*(e.clientY-rect.top)+ty;
+    apply(img);
+  },{passive:false});
+
+  /* Drag to pan */
+  document.addEventListener('mousedown',function(e){
+    var img=getImg();
+    if(!img||scale<=1||e.target!==img) return;
+    dragging=true;lastX=e.clientX;lastY=e.clientY;
+    img.style.cursor='grabbing';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove',function(e){
+    if(!dragging) return;
+    var img=getImg();
+    if(!img) return;
+    tx+=e.clientX-lastX;ty+=e.clientY-lastY;
+    lastX=e.clientX;lastY=e.clientY;
+    apply(img);
+  });
+  document.addEventListener('mouseup',function(){
+    if(dragging){
+      dragging=false;
+      var img=getImg();
+      if(img&&scale>1) img.style.cursor='grab';
+    }
+  });
+
+  /* Prevent close when zoomed */
+  document.querySelectorAll('.lb-overlay').forEach(function(ov){
+    ov.addEventListener('click',function(e){
+      if(scale>1){e.preventDefault();e.stopPropagation();}
+    });
+  });
+
+  /* Prevent native image drag */
+  document.querySelectorAll('.lb-overlay img').forEach(function(img){
+    img.addEventListener('dragstart',function(e){e.preventDefault();});
+  });
+
+  /* Keyboard: r=reset, Escape=close+reset */
+  document.addEventListener('keydown',function(e){
+    if((e.key==='r'||e.key==='R')&&getImg()){e.preventDefault();resetZoom();}
+    if(e.key==='Escape') resetZoom();
+  });
+
+  /* Reset zoom when lightbox closes */
+  document.querySelectorAll('.lb-toggle').forEach(function(chk){
+    chk.addEventListener('change',function(){if(!chk.checked) resetZoom();});
+  });
+
+  /* Touch: pinch-to-zoom + drag */
+  var lastDist=0,lastMid=null;
+  document.addEventListener('touchstart',function(e){
+    var img=getImg();if(!img) return;
+    if(e.touches.length===2){
+      var dx=e.touches[0].clientX-e.touches[1].clientX;
+      var dy=e.touches[0].clientY-e.touches[1].clientY;
+      lastDist=Math.sqrt(dx*dx+dy*dy);
+      lastMid={x:(e.touches[0].clientX+e.touches[1].clientX)/2,
+               y:(e.touches[0].clientY+e.touches[1].clientY)/2};
+      e.preventDefault();
+    }else if(e.touches.length===1&&scale>1){
+      dragging=true;lastX=e.touches[0].clientX;lastY=e.touches[0].clientY;
+      e.preventDefault();
+    }
+  },{passive:false});
+  document.addEventListener('touchmove',function(e){
+    var img=getImg();if(!img) return;
+    if(e.touches.length===2&&lastDist>0){
+      e.preventDefault();
+      var dx=e.touches[0].clientX-e.touches[1].clientX;
+      var dy=e.touches[0].clientY-e.touches[1].clientY;
+      var dist=Math.sqrt(dx*dx+dy*dy);
+      var mid={x:(e.touches[0].clientX+e.touches[1].clientX)/2,
+               y:(e.touches[0].clientY+e.touches[1].clientY)/2};
+      var oldS=scale;
+      scale=Math.max(1,Math.min(15,scale*(dist/lastDist)));
+      if(scale===1){resetZoom();lastDist=dist;return;}
+      var rect=img.getBoundingClientRect();
+      var ratio=scale/oldS;
+      tx=(1-ratio)*(mid.x-rect.left)+tx;
+      ty=(1-ratio)*(mid.y-rect.top)+ty;
+      tx+=mid.x-lastMid.x;ty+=mid.y-lastMid.y;
+      lastDist=dist;lastMid=mid;
+      apply(img);
+    }else if(e.touches.length===1&&dragging&&scale>1){
+      e.preventDefault();
+      tx+=e.touches[0].clientX-lastX;ty+=e.touches[0].clientY-lastY;
+      lastX=e.touches[0].clientX;lastY=e.touches[0].clientY;
+      apply(img);
+    }
+  },{passive:false});
+  document.addEventListener('touchend',function(e){
+    if(e.touches.length<2) lastDist=0;
+    if(e.touches.length===0) dragging=false;
+  });
+})();
+</script>
+"""
 
     # A/B comparison slider (only when comparison frames exist)
     if comparisons:
@@ -1104,7 +1263,7 @@ Click any image to enlarge; use the <span style="display:inline-flex;align-items
     <div class="ab-img-b" id="abClipB"><img id="abImgB" src="" alt="B"></div>
     <div class="ab-divider" id="abDivider"></div>
   </div>
-  <div class="ab-close-hint">Click or press Escape to close</div>
+  <div class="ab-close-hint">Scroll to zoom &middot; Drag to pan &middot; R to reset &middot; Escape to close</div>
 </div>
 <script>
 (function(){
@@ -1118,6 +1277,9 @@ Click any image to enlarge; use the <span style="display:inline-flex;align-items
   var divider = document.getElementById('abDivider');
   var labelA = document.getElementById('abLabelA');
   var labelB = document.getElementById('abLabelB');
+
+  /* Zoom state for A/B overlay */
+  var zs=1, ztx=0, zty=0, zDrag=false, zLastX=0, zLastY=0, zDidDrag=false;
 
   function clearSelection() {
     if (selectedA) selectedA.el.classList.remove('cmp-selected');
@@ -1134,16 +1296,28 @@ Click any image to enlarge; use the <span style="display:inline-flex;align-items
     divider.style.left = pct + '%';
   }
 
+  function applyZoom() {
+    viewport.style.transform = 'translate('+ztx+'px,'+zty+'px) scale('+zs+')';
+    viewport.style.cursor = zs > 1 ? 'grab' : 'col-resize';
+  }
+
+  function resetABZoom() {
+    zs=1; ztx=0; zty=0;
+    viewport.style.transform = '';
+    viewport.style.cursor = 'col-resize';
+  }
+
   function openAB(srcA, captA, srcB, captB) {
     imgA.src = srcA; imgB.src = srcB;
     labelA.textContent = 'A: ' + captA;
     labelB.textContent = 'B: ' + captB;
     updateSlider(50);
+    resetABZoom();
     overlay.style.display = 'flex';
     clearSelection();
   }
 
-  function closeAB() { overlay.style.display = 'none'; }
+  function closeAB() { resetABZoom(); overlay.style.display = 'none'; }
 
   document.querySelectorAll('.cmp-btn').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
@@ -1162,38 +1336,115 @@ Click any image to enlarge; use the <span style="display:inline-flex;align-items
     });
   });
 
+  /* Wheel zoom on A/B viewport */
+  overlay.addEventListener('wheel', function(e) {
+    if (overlay.style.display !== 'flex') return;
+    e.preventDefault();
+    var rect = viewport.getBoundingClientRect();
+    var oldS = zs;
+    zs = Math.max(1, Math.min(15, zs * (e.deltaY < 0 ? 1.15 : 1/1.15)));
+    if (zs === 1) { resetABZoom(); return; }
+    var ratio = zs / oldS;
+    ztx = (1-ratio) * (e.clientX - rect.left) + ztx;
+    zty = (1-ratio) * (e.clientY - rect.top) + zty;
+    applyZoom();
+  }, {passive: false});
+
+  /* Mouse drag to pan when zoomed, slider when not */
+  viewport.addEventListener('mousedown', function(e) {
+    if (zs > 1) {
+      zDrag = true; zDidDrag = false;
+      zLastX = e.clientX; zLastY = e.clientY;
+      viewport.style.cursor = 'grabbing';
+      e.preventDefault();
+    }
+  });
   viewport.addEventListener('mousemove', function(e) {
+    if (zDrag) {
+      ztx += e.clientX - zLastX; zty += e.clientY - zLastY;
+      zLastX = e.clientX; zLastY = e.clientY;
+      zDidDrag = true;
+      applyZoom();
+      return;
+    }
+    /* Slider — works at any zoom level */
     var rect = viewport.getBoundingClientRect();
     var pct = ((e.clientX - rect.left) / rect.width) * 100;
     pct = Math.max(0, Math.min(100, pct));
     updateSlider(pct);
   });
-
-  var touchStartX = 0, touchStartY = 0;
-  viewport.addEventListener('touchstart', function(e) {
-    touchStartX = e.touches[0].clientX;
-    touchStartY = e.touches[0].clientY;
-  }, { passive: true });
-  viewport.addEventListener('touchmove', function(e) {
-    e.preventDefault();
-    var rect = viewport.getBoundingClientRect();
-    var pct = ((e.touches[0].clientX - rect.left) / rect.width) * 100;
-    pct = Math.max(0, Math.min(100, pct));
-    updateSlider(pct);
-  }, { passive: false });
-  viewport.addEventListener('touchend', function(e) {
-    var dx = e.changedTouches[0].clientX - touchStartX;
-    var dy = e.changedTouches[0].clientY - touchStartY;
-    if (Math.sqrt(dx*dx + dy*dy) < 10) closeAB();
+  document.addEventListener('mouseup', function() {
+    if (zDrag) { zDrag = false; if (zs > 1) viewport.style.cursor = 'grab'; }
   });
 
-  viewport.addEventListener('click', function() { closeAB(); });
+  /* Touch: single-finger slider or pan; two-finger pinch zoom */
+  var abTouchDist=0, abTouchMid=null;
+  viewport.addEventListener('touchstart', function(e) {
+    if (e.touches.length === 2) {
+      var dx=e.touches[0].clientX-e.touches[1].clientX;
+      var dy=e.touches[0].clientY-e.touches[1].clientY;
+      abTouchDist = Math.sqrt(dx*dx+dy*dy);
+      abTouchMid = {x:(e.touches[0].clientX+e.touches[1].clientX)/2,
+                    y:(e.touches[0].clientY+e.touches[1].clientY)/2};
+      e.preventDefault();
+    } else if (e.touches.length === 1 && zs > 1) {
+      zDrag = true; zDidDrag = false;
+      zLastX = e.touches[0].clientX; zLastY = e.touches[0].clientY;
+      e.preventDefault();
+    }
+  }, {passive: false});
+  viewport.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    if (e.touches.length === 2 && abTouchDist > 0) {
+      var dx=e.touches[0].clientX-e.touches[1].clientX;
+      var dy=e.touches[0].clientY-e.touches[1].clientY;
+      var dist=Math.sqrt(dx*dx+dy*dy);
+      var mid={x:(e.touches[0].clientX+e.touches[1].clientX)/2,
+               y:(e.touches[0].clientY+e.touches[1].clientY)/2};
+      var oldS=zs;
+      zs=Math.max(1,Math.min(15,zs*(dist/abTouchDist)));
+      if(zs===1){resetABZoom();abTouchDist=dist;return;}
+      var rect=viewport.getBoundingClientRect();
+      var ratio=zs/oldS;
+      ztx=(1-ratio)*(mid.x-rect.left)+ztx;
+      zty=(1-ratio)*(mid.y-rect.top)+zty;
+      ztx+=mid.x-abTouchMid.x; zty+=mid.y-abTouchMid.y;
+      abTouchDist=dist; abTouchMid=mid;
+      applyZoom();
+    } else if (e.touches.length===1 && zDrag && zs>1) {
+      ztx+=e.touches[0].clientX-zLastX; zty+=e.touches[0].clientY-zLastY;
+      zLastX=e.touches[0].clientX; zLastY=e.touches[0].clientY;
+      zDidDrag=true;
+      applyZoom();
+    } else if (e.touches.length===1 && zs<=1) {
+      var rect=viewport.getBoundingClientRect();
+      var pct=((e.touches[0].clientX-rect.left)/rect.width)*100;
+      pct=Math.max(0,Math.min(100,pct));
+      updateSlider(pct);
+    }
+  }, {passive: false});
+  viewport.addEventListener('touchend', function(e) {
+    if(e.touches.length<2) abTouchDist=0;
+    if(e.touches.length===0){
+      zDrag=false;
+      if(!zDidDrag && zs<=1) closeAB();
+      zDidDrag=false;
+    }
+  });
+
+  /* Click: close only at 1x zoom and if not after a drag */
+  viewport.addEventListener('click', function() {
+    if (zDidDrag) { zDidDrag = false; return; }
+    if (zs > 1) return;
+    closeAB();
+  });
 
   document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-      if (overlay.style.display === 'flex') closeAB();
-      else clearSelection();
+    if (overlay.style.display === 'flex') {
+      if (e.key === 'r' || e.key === 'R') { e.preventDefault(); resetABZoom(); return; }
+      if (e.key === 'Escape') { closeAB(); return; }
     }
+    if (e.key === 'Escape') clearSelection();
   });
 })();
 </script>
