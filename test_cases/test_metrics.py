@@ -5,7 +5,7 @@ responds correctly to its target artifact.
 Usage:
     python test_cases/test_metrics.py
 
-Exit code 0 if all 9 tests pass, 1 otherwise.
+Exit code 0 if all tests pass, 1 otherwise.
 """
 
 import sys, os
@@ -23,6 +23,8 @@ from quality_report import (
     ringing_measure,
     colorfulness_metric,
     naturalness_nss,
+    crushed_blacks,
+    blown_whites,
 )
 
 SIZE = 512
@@ -292,6 +294,7 @@ def run_tests():
     results.append(("Naturalness", "naturalness", v_good, v_bad, "higher", passed))
 
     # --- Test 7: Temporal Stability ---
+    # Uses brightness-normalized frame diffs (matching analyze_clip)
     rng = np.random.RandomState(7)
     base_pattern = gen_texture_gratings()  # reuse sinusoidal pattern
     n_frames = 30
@@ -303,7 +306,8 @@ def run_tests():
         frame = base_pattern + rng.normal(0, 0.001, base_pattern.shape)
         frame = np.clip(frame, 0, 1)
         if prev is not None:
-            stable_diffs.append(np.mean(np.abs(frame - prev)))
+            mean_y = 0.5 * (np.mean(frame) + np.mean(prev))
+            stable_diffs.append(np.mean(np.abs(frame - prev)) / (mean_y + 1e-10))
         prev = frame
 
     # Flickering: sinusoidal brightness oscillation
@@ -313,13 +317,56 @@ def run_tests():
         brightness = 0.05 * np.sin(2 * np.pi * i / 5.0)
         frame = np.clip(base_pattern + brightness, 0, 1)
         if prev is not None:
-            flicker_diffs.append(np.mean(np.abs(frame - prev)))
+            mean_y = 0.5 * (np.mean(frame) + np.mean(prev))
+            flicker_diffs.append(np.mean(np.abs(frame - prev)) / (mean_y + 1e-10))
         prev = frame
 
     v_good = float(np.mean(stable_diffs))
     v_bad = float(np.mean(flicker_diffs))
     passed = v_good < v_bad
     results.append(("Temporal Stability", "temporal_stability", v_good, v_bad, "lower", passed))
+
+    # --- Test 8: Crushed Blacks ---
+    # Good: smooth gradient 0→1 (shadow pixels spread across full range)
+    # Bad: same but all pixels below 0.10 clamped to 0.03 (piled at floor)
+    gradient = gen_smooth_gradient()
+    crushed_img = gradient.copy()
+    crushed_img[crushed_img < 0.10] = 0.03
+    save_png("shadows_spread.png", gradient)
+    save_png("shadows_crushed.png", crushed_img)
+
+    v_good = crushed_blacks(gradient)
+    v_bad = crushed_blacks(crushed_img)
+    passed = v_good < v_bad
+    results.append(("Crushed Blacks", "crushed_blacks", v_good, v_bad, "lower", passed))
+
+    # --- Test 9: Blown Whites ---
+    # Good: smooth gradient 0→1 (highlight pixels spread across full range)
+    # Bad: same but all pixels above 0.90 clamped to 0.97 (piled at ceiling)
+    blown_img = gradient.copy()
+    blown_img[blown_img > 0.90] = 0.97
+    save_png("highlights_spread.png", gradient)
+    save_png("highlights_blown.png", blown_img)
+
+    v_good = blown_whites(gradient)
+    v_bad = blown_whites(blown_img)
+    passed = v_good < v_bad
+    results.append(("Blown Whites", "blown_whites", v_good, v_bad, "lower", passed))
+
+    # --- Test 10: Brightness Invariance ---
+    # Verify brightness-agnostic metrics give the same result at different
+    # brightness levels.  The sharp scene at 1.0x vs 0.3x should produce
+    # nearly identical values for detail, sharpness, and edge_strength.
+    dim = np.clip(sharp * 0.3, 0, 1)
+    for metric_name, func in [("detail", detail_texture),
+                               ("sharpness", sharpness_laplacian),
+                               ("edge_strength", edge_strength_sobel)]:
+        v_normal = func(sharp)
+        v_dim = func(dim)
+        # Allow 5% relative tolerance
+        rel_diff = abs(v_normal - v_dim) / (abs(v_normal) + 1e-10)
+        passed = rel_diff < 0.05
+        results.append(("Brightness Inv.", metric_name, v_normal, v_dim, "~equal", passed))
 
     return results
 

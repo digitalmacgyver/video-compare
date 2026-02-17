@@ -16,17 +16,17 @@ No-reference quality metrics pipeline for comparing analog video capture devices
 ```bash
 source venv/bin/activate
 
-# Normalize a set of clips (auto-detects frame rate and resolution)
-python normalize.py /path/to/clips/ --reference best_clip.mov
-
-# Generate quality report (JSON + HTML) with comparison frames and sample screenshots
-python quality_report.py /path/to/clips/normalized/ --screenshots 5
+# Generate quality report directly on raw clips (no normalization needed)
+python quality_report.py /path/to/clips/ --screenshots 5
 
 # For non-.mov files, use --pattern; use --skip for timing alignment
 python quality_report.py /path/to/clips/ --pattern "*_sls.mp4" --name sls_report --skip jvctbc1:1
 
 # Cross-clip comparison from multiple JSON reports
 python cross_clip_report.py report1.json report2.json --output comparison.html
+
+# Normalize clips if needed for visual comparison (not required for metrics)
+python normalize.py /path/to/clips/ --reference best_clip.mov
 ```
 
 ## Python Environment
@@ -42,7 +42,15 @@ python cross_clip_report.py report1.json report2.json --output comparison.html
 - OpenCV headless does NOT include `cv2.quality` (no BRISQUE/NIQE)
 - Noise estimation uses flat-region approach (Sobel gradient < 0.03) to avoid confusing blur with low noise
 - MSCN kurtosis used instead of GGD beta fitting (beta~2.0 for all ProRes clips, no discrimination)
-- 9 metrics with rank-based overall composite (average rank across all metrics, equal weight)
+- 11 metrics with rank-based overall composite (average rank across all metrics, equal weight):
+  sharpness, edge_strength, blocking, detail, texture_quality, ringing, temporal_stability,
+  colorfulness, naturalness, crushed_blacks, blown_whites
+- All metrics are brightness-agnostic — no upstream brightness normalization is required
+  - sharpness, edge_strength, detail, ringing, temporal_stability: normalized by mean Y
+  - blocking, texture_quality: inherently scale-invariant (ratios)
+  - naturalness: MSCN divides by local sigma
+  - colorfulness: operates on chroma planes
+  - crushed_blacks/blown_whites: headroom ratios (fraction of shadow/highlight pixels at floor/ceiling)
 - Dropped metrics: noise (r=0.83 with detail), contrast/tonal_richness (near-zero discrimination), grad_smoothness (r=0.94 with texture_quality)
 - Ringing retained despite r=0.94 with sharpness — distinct analog artifact (VCR sharpness circuits, aperture correction)
 - Comparison frames use p90 percentile selection from the best-scoring clip per metric
@@ -57,7 +65,7 @@ python cross_clip_report.py report1.json report2.json --output comparison.html
 
 ## Testing
 
-- Run `python test_cases/test_metrics.py` to validate all 9 metrics before committing changes to `quality_report.py`
+- Run `python test_cases/test_metrics.py` to validate all 11 metrics before committing changes to `quality_report.py`
 - Any metric function change (thresholds, kernels, formulas) must pass the existing test suite
 - New metrics must include a corresponding synthetic test case in `test_cases/test_metrics.py`
 

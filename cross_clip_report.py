@@ -25,18 +25,21 @@ import numpy as np
 ALL_KEYS = [
     "sharpness", "edge_strength", "blocking", "detail", "texture_quality",
     "ringing", "temporal_stability", "colorfulness", "naturalness",
+    "crushed_blacks", "blown_whites",
 ]
 
 METRIC_INFO = {
-    "sharpness":          ("Sharpness",      "Laplacian var",       True),
-    "edge_strength":      ("Edge Strength",  "Sobel mean",          True),
+    "sharpness":          ("Sharpness",      "Laplacian CV\u00b2",   True),
+    "edge_strength":      ("Edge Strength",  "Sobel norm.",          True),
     "blocking":           ("Blocking",       "8x8 grid ratio",      None),
-    "detail":             ("Detail",         "local var median",     True),
+    "detail":             ("Detail",         "local CV median",      True),
     "texture_quality":    ("Texture Q",      "structure ratio",      True),
-    "ringing":            ("Ringing",        "edge overshoot",       False),
-    "temporal_stability": ("Temporal",       "frame diff mean",      False),
+    "ringing":            ("Ringing",        "edge overshoot norm.", False),
+    "temporal_stability": ("Temporal",       "frame diff norm.",     False),
     "colorfulness":       ("Colorfulness",   "Hasler-S. M",          True),
     "naturalness":        ("Naturalness",    "MSCN kurtosis",        True),
+    "crushed_blacks":     ("Crushed Blacks", "shadow headroom",     False),
+    "blown_whites":       ("Blown Whites",   "highlight headroom",  False),
 }
 
 COLORS_7  = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#42d4f4", "#f58231", "#911eb4"]
@@ -54,14 +57,19 @@ def compute_composites(data):
     """Compute rank-based overall composite scores.
 
     For each metric, clips are ranked 1 (best) to N (worst). The overall
-    score is the average rank across all 9 metrics — lower is better.
+    score is the average rank across all metrics — lower is better.
     Z-scores are also computed for heatmap cell coloring (positive = good).
     """
     clip_names = sorted(data.keys())
     n = len(clip_names)
+    # Only use metrics present in all clips (backward compat with older JSONs)
+    available = set(ALL_KEYS)
+    for c in clip_names:
+        available &= set(data[c].keys())
+    keys = [k for k in ALL_KEYS if k in available]
 
     zscores = {}
-    for key in ALL_KEYS:
+    for key in keys:
         arr = np.array([data[c][key]["mean"] for c in clip_names])
         mu, sigma = np.mean(arr), np.std(arr)
         zs = (arr - mu) / sigma if sigma > 1e-15 else np.zeros(n)
@@ -75,7 +83,7 @@ def compute_composites(data):
         zscores[key] = zs
 
     ranks = {}
-    for key in ALL_KEYS:
+    for key in keys:
         arr = np.array([data[c][key]["mean"] for c in clip_names])
         _, _, hb = METRIC_INFO[key]
         if hb is True:
@@ -89,11 +97,11 @@ def compute_composites(data):
             rank_arr[idx] = r
         ranks[key] = rank_arr
 
-    avg_ranks = np.mean([ranks[k] for k in ALL_KEYS], axis=0)
+    avg_ranks = np.mean([ranks[k] for k in keys], axis=0)
 
     return {c: {"overall": float(avg_ranks[i]),
-                "ranks": {k: int(ranks[k][i]) for k in ALL_KEYS},
-                "zscores": {k: float(zscores[k][i]) for k in ALL_KEYS}}
+                "ranks": {k: int(ranks[k][i]) for k in keys},
+                "zscores": {k: float(zscores[k][i]) for k in keys}}
             for i, c in enumerate(clip_names)}
 
 
@@ -176,6 +184,13 @@ def generate_crossclip_html(all_data, clip_labels):
     n_clips = len(clip_labels)
     n_devices = len(device_names)
 
+    # Only use metrics present in all devices across all clips
+    avail_keys = set(ALL_KEYS)
+    for c in clip_labels:
+        for d in device_names:
+            avail_keys &= set(all_data[c][d].keys())
+    active_keys = [k for k in ALL_KEYS if k in avail_keys]
+
     # Assign colors to clips and devices
     clip_colors = {c: CLIP_COLORS[i % len(CLIP_COLORS)] for i, c in enumerate(clip_labels)}
 
@@ -214,7 +229,7 @@ def generate_crossclip_html(all_data, clip_labels):
     avg_ranks = {}
     for dev in device_names:
         avg_ranks[dev] = {}
-        for key in ALL_KEYS:
+        for key in active_keys:
             _, _, higher_better = METRIC_INFO[key]
             ranks = []
             for clip in clip_labels:
@@ -231,7 +246,7 @@ def generate_crossclip_html(all_data, clip_labels):
 
     consistency_data = []
     for dev in ranked_devices:
-        cells = [{"rank": avg_ranks[dev][key], "key": key} for key in ALL_KEYS]
+        cells = [{"rank": avg_ranks[dev][key], "key": key} for key in active_keys]
         consistency_data.append({"name": dev, "avg_overall": avg_overall[dev], "cells": cells})
 
     # Build HTML
@@ -365,7 +380,7 @@ document.querySelectorAll('.heatmap th').forEach((th,colIdx)=>{{
         clip_list=clip_list_str,
         bar_h=bar_height,
         th_metrics="".join(
-            '<th>{}</th>'.format(METRIC_INFO[k][0]) for k in ALL_KEYS
+            '<th>{}</th>'.format(METRIC_INFO[k][0]) for k in active_keys
         ),
         ranked_dev_json=json.dumps(ranked_devices),
         datasets_grouped_json=json.dumps(datasets_grouped),

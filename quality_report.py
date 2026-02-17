@@ -22,9 +22,13 @@ Examples:
     python quality_report.py /path/to/normalized/ --pattern "*_sls.mp4" --name sls_report
     python quality_report.py /path/to/normalized/ --text
 
-Metrics (9 total):
+Metrics (11 total, all brightness-agnostic):
   Sharpness, edge strength, blocking, detail, texture quality, ringing, temporal stability,
-  colorfulness, naturalness
+  colorfulness, naturalness, crushed blacks, blown whites
+
+Brightness-sensitive metrics (sharpness, edge strength, detail, ringing, temporal stability) are
+normalized by mean Y to eliminate dependence on capture brightness / gain settings.  No upstream
+brightness normalization is required.
 
 Dropped metrics: noise (subordinate to detail — correlated r=0.83), contrast and tonal richness
 (near-zero discrimination across clips), gradient smoothness (r=0.94 duplicate of texture quality).
@@ -67,21 +71,24 @@ def probe_video(filepath):
 ALL_KEYS = [
     "sharpness", "edge_strength", "blocking", "detail", "texture_quality",
     "ringing", "temporal_stability", "colorfulness", "naturalness",
+    "crushed_blacks", "blown_whites",
 ]
 
 # Metrics still computed but excluded from scoring (low discrimination or redundant)
 _DROPPED_KEYS = ["noise", "contrast", "tonal_richness", "grad_smoothness"]
 
 METRIC_INFO = {
-    "sharpness":          ("Sharpness",      "Laplacian var",       True),
-    "edge_strength":      ("Edge Strength",  "Sobel mean",          True),
+    "sharpness":          ("Sharpness",      "Laplacian CV\u00b2",   True),
+    "edge_strength":      ("Edge Strength",  "Sobel norm.",          True),
     "blocking":           ("Blocking",       "8x8 grid ratio",      None),
-    "detail":             ("Detail",         "local var median",     True),
+    "detail":             ("Detail",         "local CV median",      True),
     "texture_quality":    ("Texture Q",      "structure ratio",      True),
-    "ringing":            ("Ringing",        "edge overshoot",       False),
-    "temporal_stability": ("Temporal",       "frame diff mean",      False),
+    "ringing":            ("Ringing",        "edge overshoot norm.", False),
+    "temporal_stability": ("Temporal",       "frame diff norm.",     False),
     "colorfulness":       ("Colorfulness",   "Hasler-S. M",          True),
     "naturalness":        ("Naturalness",    "MSCN kurtosis",        True),
+    "crushed_blacks":     ("Crushed Blacks", "shadow headroom",     False),
+    "blown_whites":       ("Blown Whites",   "highlight headroom",  False),
 }
 
 CMP_ICON_SVG = ('<svg viewBox="0 0 24 24" width="20" height="20" fill="none" '
@@ -135,15 +142,17 @@ def to_float(y):
 # =====================================================================
 
 def sharpness_laplacian(yf):
-    """Laplacian variance — standard no-ref sharpness metric."""
-    return np.var(cv2.Laplacian(yf, cv2.CV_64F))
+    """Laplacian variance normalized by mean brightness squared — brightness-agnostic."""
+    mean_y = np.mean(yf)
+    return np.var(cv2.Laplacian(yf, cv2.CV_64F)) / (mean_y ** 2 + 1e-10)
 
 
 def edge_strength_sobel(yf):
-    """Mean Sobel gradient magnitude — edge definition quality."""
+    """Mean Sobel gradient magnitude normalized by mean brightness — brightness-agnostic."""
     sx = cv2.Sobel(yf, cv2.CV_64F, 1, 0, ksize=3)
     sy = cv2.Sobel(yf, cv2.CV_64F, 0, 1, ksize=3)
-    return np.mean(np.sqrt(sx * sx + sy * sy))
+    mean_y = np.mean(yf)
+    return np.mean(np.sqrt(sx * sx + sy * sy)) / (mean_y + 1e-10)
 
 
 def noise_estimate(yf):
@@ -196,14 +205,17 @@ def blocking_artifact_measure(yf):
 
 
 def detail_texture(yf):
-    """Median local variance in 16x16 blocks — detail/texture preservation."""
+    """Median local coefficient of variation in 16x16 blocks — brightness-agnostic detail."""
     block = 16
     h, w = yf.shape
-    variances = []
+    cvs = []
     for r in range(0, h - block + 1, block):
         for c in range(0, w - block + 1, block):
-            variances.append(np.var(yf[r:r+block, c:c+block]))
-    return np.median(variances)
+            blk = yf[r:r+block, c:c+block]
+            mu = np.mean(blk)
+            if mu > 0.01:  # skip truly black blocks
+                cvs.append(np.std(blk) / mu)
+    return float(np.median(cvs)) if cvs else 0.0
 
 
 def texture_quality_measure(yf):
@@ -229,7 +241,7 @@ def texture_quality_measure(yf):
 
 
 def ringing_measure(yf):
-    """Detect ringing/haloing around edges via near-edge Laplacian energy."""
+    """Detect ringing/haloing — near-edge Laplacian normalized by mean brightness."""
     edges = cv2.Canny((yf * 255).astype(np.uint8), 50, 150)
     if edges.sum() == 0:
         return 0.0
@@ -237,7 +249,8 @@ def ringing_measure(yf):
     near_edge_only = near_edge & ~edges
     if near_edge_only.sum() == 0:
         return 0.0
-    return np.mean(np.abs(cv2.Laplacian(yf, cv2.CV_64F))[near_edge_only > 0])
+    mean_y = np.mean(yf)
+    return np.mean(np.abs(cv2.Laplacian(yf, cv2.CV_64F))[near_edge_only > 0]) / (mean_y + 1e-10)
 
 
 # =====================================================================
@@ -258,6 +271,36 @@ def colorfulness_metric(u, v):
     sigma_rgyb = np.sqrt(np.std(rg)**2 + np.std(yb)**2)
     mu_rgyb = np.sqrt(np.mean(rg)**2 + np.mean(yb)**2)
     return float(sigma_rgyb + 0.3 * mu_rgyb)
+
+
+def crushed_blacks(yf):
+    """Shadow headroom ratio — fraction of shadow pixels crushed to near-black.
+
+    Counts pixels below the crush threshold (Y < ~72 in 10-bit) as a fraction
+    of all shadow-region pixels (Y < ~153).  High ratio = shadow detail lost
+    to clipping.  Returns 0 if no shadow pixels present.
+    """
+    SHADOW_CEIL = 0.15   # upper bound of shadow region (~Y=153)
+    CRUSH_FLOOR = 0.07   # crush threshold (~Y=72, near legal black 64)
+    n_shadow = np.count_nonzero(yf < SHADOW_CEIL)
+    if n_shadow == 0:
+        return 0.0
+    return float(np.count_nonzero(yf < CRUSH_FLOOR)) / float(n_shadow)
+
+
+def blown_whites(yf):
+    """Highlight headroom ratio — fraction of highlight pixels blown to near-white.
+
+    Counts pixels above the blow threshold (Y > ~951 in 10-bit) as a fraction
+    of all highlight-region pixels (Y > ~869).  High ratio = highlight detail
+    lost to clipping.  Returns 0 if no highlight pixels present.
+    """
+    HIGHLIGHT_FLOOR = 0.85  # lower bound of highlight region (~Y=869)
+    BLOW_CEIL = 0.93        # blow threshold (~Y=951, near legal white 940)
+    n_highlight = np.count_nonzero(yf > HIGHLIGHT_FLOOR)
+    if n_highlight == 0:
+        return 0.0
+    return float(np.count_nonzero(yf > BLOW_CEIL)) / float(n_highlight)
 
 
 def tonal_richness(yf):
@@ -367,9 +410,12 @@ def analyze_clip(filepath, width, height, skip_frames=0):
         accum["ringing"].append(ringing_measure(yf))
         accum["colorfulness"].append(colorfulness_metric(u, v))
         accum["naturalness"].append(naturalness_nss(yf))
+        accum["crushed_blacks"].append(crushed_blacks(yf))
+        accum["blown_whites"].append(blown_whites(yf))
 
         if prev_yf is not None:
-            temporal_diffs.append(np.mean(np.abs(yf - prev_yf)))
+            mean_y = 0.5 * (np.mean(yf) + np.mean(prev_yf))
+            temporal_diffs.append(np.mean(np.abs(yf - prev_yf)) / (mean_y + 1e-10))
         prev_yf = yf
         n_frames += 1
 

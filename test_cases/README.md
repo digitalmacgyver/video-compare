@@ -1,6 +1,6 @@
 # Metric Validation Test Suite
 
-Synthetic test images that verify each of the 9 quality metrics responds correctly to its target artifact. No external test databases required — all images are generated with NumPy/OpenCV for full reproducibility.
+Synthetic test images that verify each of the 11 quality metrics responds correctly to its target artifact, plus brightness invariance checks. No external test databases required — all images are generated with NumPy/OpenCV for full reproducibility.
 
 ## Running
 
@@ -22,10 +22,13 @@ Exit code 0 if all tests pass, 1 otherwise.
 | Colorfulness | colorfulness | Full-gamut color bars (10-bit YCbCr) | Same with chroma scaled to 25% |
 | Naturalness | naturalness | Multi-scale random rectangles | Same + heavy Gaussian noise (sigma=0.20) |
 | Temporal Stability | temporal_stability | Static frames + tiny noise | Same + sinusoidal brightness flicker |
+| Crushed Blacks | crushed_blacks | Smooth gradient (shadows spread) | Same with dark pixels clamped to 0.03 |
+| Blown Whites | blown_whites | Smooth gradient (highlights spread) | Same with bright pixels clamped to 0.97 |
+| Brightness Inv. | detail, sharpness, edge_strength | Sharp scene at 1.0x brightness | Same scene at 0.3x brightness (~equal) |
 
 ## Assets
 
-The `assets/` directory contains 12 PNG files (good/bad pairs) saved by the script for visual inspection. Temporal stability is tested numerically with frame-pair arrays and has no corresponding PNGs.
+The `assets/` directory contains 16 PNG files (good/bad pairs) saved by the script for visual inspection. Temporal stability and brightness invariance are tested numerically and share assets with other tests.
 
 ## Adding Tests for New Metrics
 
