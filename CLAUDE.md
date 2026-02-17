@@ -55,6 +55,12 @@ python cross_clip_report.py report1.json report2.json --output comparison.html
 - Old reports archive: `/wintmp/analog_video/video_compare/`
 - Normalized outputs in `normalized/` subdirectories of each source
 
+## Testing
+
+- Run `python test_cases/test_metrics.py` to validate all 9 metrics before committing changes to `quality_report.py`
+- Any metric function change (thresholds, kernels, formulas) must pass the existing test suite
+- New metrics must include a corresponding synthetic test case in `test_cases/test_metrics.py`
+
 ## Code Style
 
 - Single-file scripts, no package structure
