@@ -116,10 +116,10 @@ See [test_cases/README.md](test_cases/README.md) for details on the 14 test case
 
 - Python 3.8+
 - ffmpeg / ffprobe
-- numpy, opencv-python-headless, scipy
+- Python dependencies listed in `requirements.txt`
 
 ```bash
 python -m venv venv
 source venv/bin/activate
-pip install numpy opencv-python-headless scipy
+pip install -r requirements.txt
 ```

@@ -32,7 +32,8 @@ python normalize.py /path/to/clips/ --reference best_clip.mov
 ## Python Environment
 
 - Virtual environment at `./venv/`; activate with `source venv/bin/activate`
-- Dependencies: numpy, opencv-python-headless, scipy
+- Dependencies listed in `requirements.txt`: numpy, opencv-python-headless, scipy
+- Install with: `pip install -r requirements.txt`
 - ffmpeg 4.4.2 available system-wide
 
 ## Technical Constraints
