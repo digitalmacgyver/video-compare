@@ -1,0 +1,26 @@
+=== Per-Metric Value Comparison ===
+Clips: 16, Metrics: 11
+Max absolute difference: 0.00e+00
+All per-metric values IDENTICAL.
+
+=== Composite Ranking Comparison ===
+Clip                                              Base     Post     Diff
+------------------------------------------------------------------------
+mitsutbc1                                         5.95     5.95    +0.00
+ag1980tbc1                                        7.23     7.23    +0.00
+jvctb0_pcEdit_r3Off_snellhd                       7.68     7.68    +0.00
+jvctbc1_pcEdit_r3Off_b2                           7.95     7.95    +0.00
+ag1980tbc1_sharpMIN_b2                            8.05     8.05    +0.00
+jvctbc1_pcAuto_r3On_b2                            8.05     8.05    +0.00
+ag1980tbc1_sharpMAX_b2                            8.14     8.14    +0.00
+jvctb0_pcEdit_r3Off_leitchtbc1_3dY                8.32     8.32    +0.00
+jvctb0_pcEdit_r3Off_dv                            8.59     8.59    +0.00
+ds555tbc1_dnrOff                                  8.77     8.77    +0.00
+mitsutbc0                                         8.95     8.95    +0.00
+ag1980tbc0                                        9.32     9.32    +0.00
+ds555tbc0_dnrOff                                  9.41     9.41    +0.00
+ds555tbc1_dnrOn                                   9.41     9.41    +0.00
+jvctb0_pcEdit_r3Off_leitchtbc0_3dY                9.50     9.50    +0.00
+jvctbc0_pcEdit_r3Off_b2                          10.68    10.68    +0.00
+
+No ranking changes.

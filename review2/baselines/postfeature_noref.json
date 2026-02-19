@@ -1,0 +1,791 @@
+{
+  "_metadata": {
+    "schema_version": 2,
+    "metrics": [
+      "sharpness",
+      "edge_strength",
+      "blocking",
+      "detail",
+      "texture_quality",
+      "ringing",
+      "temporal_stability",
+      "colorfulness",
+      "naturalness",
+      "crushed_blacks",
+      "blown_whites"
+    ],
+    "n_metrics": 11,
+    "source_dir": "/wintmp/analog_video/noref_compare",
+    "pattern": "*.mov",
+    "skip_frames": {},
+    "timestamp": "2026-02-18T21:34:29.039671"
+  },
+  "ag1980tbc0": {
+    "sharpness": {
+      "mean": 0.0119457471622993,
+      "std": 0.0133748384805356
+    },
+    "edge_strength": {
+      "mean": 0.3453140318262627,
+      "std": 0.1940929756614224
+    },
+    "blocking": {
+      "mean": 1.0216313966216783,
+      "std": 0.022705029211842906
+    },
+    "detail": {
+      "mean": 0.09756806170347979,
+      "std": 0.05618219442961489
+    },
+    "texture_quality": {
+      "mean": 0.830402911200468,
+      "std": 0.03658416005675328
+    },
+    "ringing": {
+      "mean": 0.14141404883257663,
+      "std": 0.05328198164350985
+    },
+    "colorfulness": {
+      "mean": 32.21402103281076,
+      "std": 9.498736022892247
+    },
+    "naturalness": {
+      "mean": -0.33964653776617393,
+      "std": 0.12298400423580161
+    },
+    "crushed_blacks": {
+      "mean": 0.010757065267786732,
+      "std": 0.022438711237189442
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "temporal_stability": {
+      "mean": 0.10650067520456935,
+      "std": 0.08054677895790503
+    },
+    "n_frames": 594,
+    "_source_file": "twister_ag1980tbc0_svideo_direct_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "ag1980tbc1_sharpMAX_b2": {
+    "sharpness": {
+      "mean": 0.013923394498621757,
+      "std": 0.015154361391922418
+    },
+    "edge_strength": {
+      "mean": 0.4170177676240832,
+      "std": 0.23372714148474236
+    },
+    "blocking": {
+      "mean": 1.0401946184844462,
+      "std": 0.017115476760865424
+    },
+    "detail": {
+      "mean": 0.11142588422614577,
+      "std": 0.06483244645924609
+    },
+    "texture_quality": {
+      "mean": 0.8093436509477945,
+      "std": 0.037485108117953414
+    },
+    "ringing": {
+      "mean": 0.1429109751703296,
+      "std": 0.057509498750624784
+    },
+    "colorfulness": {
+      "mean": 58.161882006661656,
+      "std": 17.23920390934498
+    },
+    "naturalness": {
+      "mean": -0.18919906510080198,
+      "std": 0.1436480022353983
+    },
+    "crushed_blacks": {
+      "mean": 0.01971284745109338,
+      "std": 0.03307498116977121
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 6.285291116759472e-06
+    },
+    "temporal_stability": {
+      "mean": 0.11922238590965029,
+      "std": 0.08705758847655926
+    },
+    "n_frames": 594,
+    "_source_file": "twister_ag1980tbc1_sharpMAX_svideo_direct_b2_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "ag1980tbc1_sharpMIN_b2": {
+    "sharpness": {
+      "mean": 0.0052259842068001616,
+      "std": 0.006065910522273884
+    },
+    "edge_strength": {
+      "mean": 0.30230385212932076,
+      "std": 0.16252874781092716
+    },
+    "blocking": {
+      "mean": 1.0693461630876224,
+      "std": 0.029337591276472244
+    },
+    "detail": {
+      "mean": 0.09316042585045285,
+      "std": 0.05050725251305194
+    },
+    "texture_quality": {
+      "mean": 0.8848805229070338,
+      "std": 0.0308553137793256
+    },
+    "ringing": {
+      "mean": 0.09959856938240932,
+      "std": 0.0431022678777443
+    },
+    "colorfulness": {
+      "mean": 58.187230694712646,
+      "std": 17.193639423492737
+    },
+    "naturalness": {
+      "mean": -0.07093519695380501,
+      "std": 0.32412284294706517
+    },
+    "crushed_blacks": {
+      "mean": 0.010836964756750382,
+      "std": 0.01956875165001848
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "temporal_stability": {
+      "mean": 0.10448006742324864,
+      "std": 0.08409980898133143
+    },
+    "n_frames": 594,
+    "_source_file": "twister_ag1980tbc1_sharpMIN_svideo_direct_b2_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "ag1980tbc1": {
+    "sharpness": {
+      "mean": 0.008438315099935305,
+      "std": 0.009836021348160357
+    },
+    "edge_strength": {
+      "mean": 0.3588721063583762,
+      "std": 0.19884762348555773
+    },
+    "blocking": {
+      "mean": 1.0430415997714955,
+      "std": 0.020347981743877606
+    },
+    "detail": {
+      "mean": 0.10184403595772056,
+      "std": 0.057862052638345776
+    },
+    "texture_quality": {
+      "mean": 0.8496150000219315,
+      "std": 0.035665446597638165
+    },
+    "ringing": {
+      "mean": 0.1177158737914231,
+      "std": 0.047638024318327456
+    },
+    "colorfulness": {
+      "mean": 58.48200817311405,
+      "std": 17.244424524254462
+    },
+    "naturalness": {
+      "mean": -0.048489306741737126,
+      "std": 0.2230830442792549
+    },
+    "crushed_blacks": {
+      "mean": 0.008450036510691651,
+      "std": 0.017384337566786583
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "temporal_stability": {
+      "mean": 0.11085530177540495,
+      "std": 0.08424952188634237
+    },
+    "n_frames": 594,
+    "_source_file": "twister_ag1980tbc1_svideo_direct_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "ds555tbc0_dnrOff": {
+    "sharpness": {
+      "mean": 0.014915223193415917,
+      "std": 0.016126407300428684
+    },
+    "edge_strength": {
+      "mean": 0.36583195627219334,
+      "std": 0.1990269648506761
+    },
+    "blocking": {
+      "mean": 1.0253387579544138,
+      "std": 0.019003330672524035
+    },
+    "detail": {
+      "mean": 0.10011346315418422,
+      "std": 0.05525342672438257
+    },
+    "texture_quality": {
+      "mean": 0.7956274484960117,
+      "std": 0.036666369302897774
+    },
+    "ringing": {
+      "mean": 0.1507896101473643,
+      "std": 0.05424334113590874
+    },
+    "colorfulness": {
+      "mean": 36.74804176090764,
+      "std": 10.570507785913843
+    },
+    "naturalness": {
+      "mean": -0.4326074723951241,
+      "std": 0.07345728286248708
+    },
+    "crushed_blacks": {
+      "mean": 0.005239698752975913,
+      "std": 0.010803099978932553
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "temporal_stability": {
+      "mean": 0.11392468366063434,
+      "std": 0.07827257418250726
+    },
+    "n_frames": 594,
+    "_source_file": "twister_ds555tbc0_dnrOff_svideo_direct_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "ds555tbc1_dnrOff": {
+    "sharpness": {
+      "mean": 0.01602020537957407,
+      "std": 0.017386727557371296
+    },
+    "edge_strength": {
+      "mean": 0.37944746955871295,
+      "std": 0.20708579593187315
+    },
+    "blocking": {
+      "mean": 1.0814045246034374,
+      "std": 0.01608639219699484
+    },
+    "detail": {
+      "mean": 0.10579882996549783,
+      "std": 0.058265410573990734
+    },
+    "texture_quality": {
+      "mean": 0.799613852628838,
+      "std": 0.036421519039610016
+    },
+    "ringing": {
+      "mean": 0.1394646500277662,
+      "std": 0.05484106599320338
+    },
+    "colorfulness": {
+      "mean": 56.60449123249092,
+      "std": 15.373224564243339
+    },
+    "naturalness": {
+      "mean": -0.41997713738822995,
+      "std": 0.10985801167521139
+    },
+    "crushed_blacks": {
+      "mean": 0.0022797628464744533,
+      "std": 0.004627813596939211
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "temporal_stability": {
+      "mean": 0.11881820648722195,
+      "std": 0.08213920021556237
+    },
+    "n_frames": 594,
+    "_source_file": "twister_ds555tbc1_dnrOff_svideo_direct_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "ds555tbc1_dnrOn": {
+    "sharpness": {
+      "mean": 0.015443544890902527,
+      "std": 0.017415483999207525
+    },
+    "edge_strength": {
+      "mean": 0.35374577599372503,
+      "std": 0.2010229268598166
+    },
+    "blocking": {
+      "mean": 1.1789971374433132,
+      "std": 0.047310680056237765
+    },
+    "detail": {
+      "mean": 0.09995920288210716,
+      "std": 0.0572669345686024
+    },
+    "texture_quality": {
+      "mean": 0.8305715922696489,
+      "std": 0.03988202882749031
+    },
+    "ringing": {
+      "mean": 0.13894804327587112,
+      "std": 0.052294662693299
+    },
+    "colorfulness": {
+      "mean": 55.07962361511626,
+      "std": 15.25365977029722
+    },
+    "naturalness": {
+      "mean": -0.46621430518444296,
+      "std": 0.12844529998346563
+    },
+    "crushed_blacks": {
+      "mean": 0.0011918482131709031,
+      "std": 0.0025804433388829325
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "temporal_stability": {
+      "mean": 0.1102293738539943,
+      "std": 0.08070923108876193
+    },
+    "n_frames": 594,
+    "_source_file": "twister_ds555tbc1_dnrOn_svideo_direct_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "jvctb0_pcEdit_r3Off_dv": {
+    "sharpness": {
+      "mean": 0.014689889551258934,
+      "std": 0.01494441957008056
+    },
+    "edge_strength": {
+      "mean": 0.3868674171993578,
+      "std": 0.20723248442089112
+    },
+    "blocking": {
+      "mean": 1.0497934486879652,
+      "std": 0.0243379076114921
+    },
+    "detail": {
+      "mean": 0.11424346520946481,
+      "std": 0.0621615367679625
+    },
+    "texture_quality": {
+      "mean": 0.816572827321222,
+      "std": 0.03920981618489128
+    },
+    "ringing": {
+      "mean": 0.13870867403218953,
+      "std": 0.05556642171964788
+    },
+    "colorfulness": {
+      "mean": 72.99133729472868,
+      "std": 20.67226096262283
+    },
+    "naturalness": {
+      "mean": -0.3965150807035529,
+      "std": 0.09407859026172602
+    },
+    "crushed_blacks": {
+      "mean": 0.0699977734569021,
+      "std": 0.0935354278926611
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 3.8855771525351984e-06
+    },
+    "temporal_stability": {
+      "mean": 0.1280750207258026,
+      "std": 0.09137818828746519
+    },
+    "n_frames": 594,
+    "_source_file": "twister_jvctb0_pcEdit_r3Off_dv_svideo_sdi_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "jvctb0_pcEdit_r3Off_leitchtbc0_3dY": {
+    "sharpness": {
+      "mean": 0.015648156608553176,
+      "std": 0.022659152147960604
+    },
+    "edge_strength": {
+      "mean": 0.3492993366157444,
+      "std": 0.18143385316739483
+    },
+    "blocking": {
+      "mean": 0.8112823280635468,
+      "std": 0.22203421323766842
+    },
+    "detail": {
+      "mean": 0.1038920078184892,
+      "std": 0.05530030677122461
+    },
+    "texture_quality": {
+      "mean": 0.8402321763828989,
+      "std": 0.034322227069791295
+    },
+    "ringing": {
+      "mean": 0.13290071764815195,
+      "std": 0.05931291598907039
+    },
+    "colorfulness": {
+      "mean": 133.05263404613495,
+      "std": 48.2492943898546
+    },
+    "naturalness": {
+      "mean": -0.43631819447118403,
+      "std": 0.3862496947033104
+    },
+    "crushed_blacks": {
+      "mean": 0.1381983091137807,
+      "std": 0.14694160687265573
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 2.413621344651176e-05
+    },
+    "temporal_stability": {
+      "mean": 0.2256710271970047,
+      "std": 0.2031911060809025
+    },
+    "n_frames": 592,
+    "_source_file": "twister_jvctb0_pcEdit_r3Off_leitchtbc0_3dY_svideo_sdi1_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "jvctb0_pcEdit_r3Off_leitchtbc1_3dY": {
+    "sharpness": {
+      "mean": 0.01325424721145626,
+      "std": 0.01319233139262398
+    },
+    "edge_strength": {
+      "mean": 0.3688216571662458,
+      "std": 0.19612400639573394
+    },
+    "blocking": {
+      "mean": 1.048698474342193,
+      "std": 0.02222619046417387
+    },
+    "detail": {
+      "mean": 0.10797986838560672,
+      "std": 0.05840910018602095
+    },
+    "texture_quality": {
+      "mean": 0.8155378333533783,
+      "std": 0.040415405562366946
+    },
+    "ringing": {
+      "mean": 0.13240118542764373,
+      "std": 0.05388398006926462
+    },
+    "colorfulness": {
+      "mean": 74.35447701243945,
+      "std": 20.8669037803209
+    },
+    "naturalness": {
+      "mean": -0.38763542766648396,
+      "std": 0.12880693942897992
+    },
+    "crushed_blacks": {
+      "mean": 0.027826742284483157,
+      "std": 0.04238617981537458
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 5.0662314618777645e-06
+    },
+    "temporal_stability": {
+      "mean": 0.12249554845908463,
+      "std": 0.0871381926546963
+    },
+    "n_frames": 594,
+    "_source_file": "twister_jvctb0_pcEdit_r3Off_leitchtbc1_3dY_svideo_sdi_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "jvctb0_pcEdit_r3Off_snellhd": {
+    "sharpness": {
+      "mean": 0.004748953285261005,
+      "std": 0.004225551731050405
+    },
+    "edge_strength": {
+      "mean": 0.27450992735625923,
+      "std": 0.1405430374254228
+    },
+    "blocking": {
+      "mean": 1.037116895343552,
+      "std": 0.026018091866077092
+    },
+    "detail": {
+      "mean": 0.08222177930058537,
+      "std": 0.0438277798926639
+    },
+    "texture_quality": {
+      "mean": 0.856758010659925,
+      "std": 0.02688084465571537
+    },
+    "ringing": {
+      "mean": 0.09184059380176213,
+      "std": 0.030985772561035383
+    },
+    "colorfulness": {
+      "mean": 53.61175607733544,
+      "std": 15.002527158192194
+    },
+    "naturalness": {
+      "mean": -0.2877736681236729,
+      "std": 0.11796325645658692
+    },
+    "crushed_blacks": {
+      "mean": 0.0002268380151914199,
+      "std": 0.001217366775155267
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "temporal_stability": {
+      "mean": 0.09641112377223171,
+      "std": 0.07069551200911295
+    },
+    "n_frames": 594,
+    "_source_file": "twister_jvctb0_pcEdit_r3Off_snellhd_svideo_sdi_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "jvctbc0_pcEdit_r3Off_b2": {
+    "sharpness": {
+      "mean": 0.012338114720635611,
+      "std": 0.012807373957061358
+    },
+    "edge_strength": {
+      "mean": 0.36191595335491694,
+      "std": 0.1938114536558376
+    },
+    "blocking": {
+      "mean": 1.0397710117169263,
+      "std": 0.02386131124631468
+    },
+    "detail": {
+      "mean": 0.10532085848669528,
+      "std": 0.057562351828502174
+    },
+    "texture_quality": {
+      "mean": 0.8193263819379647,
+      "std": 0.03748546428720869
+    },
+    "ringing": {
+      "mean": 0.13807007262157048,
+      "std": 0.05494144273223467
+    },
+    "colorfulness": {
+      "mean": 42.06875845748396,
+      "std": 12.023826217255818
+    },
+    "naturalness": {
+      "mean": -0.4404157761032179,
+      "std": 0.09596493128817139
+    },
+    "crushed_blacks": {
+      "mean": 0.05925273005007675,
+      "std": 0.07832939736399114
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "temporal_stability": {
+      "mean": 0.1194001320434874,
+      "std": 0.08493591219768455
+    },
+    "n_frames": 594,
+    "_source_file": "twister_jvctbc0_pcEdit_r3Off_svideo_direct_b2_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "jvctbc1_pcAuto_r3On_b2": {
+    "sharpness": {
+      "mean": 0.013597569575261854,
+      "std": 0.017137760815757776
+    },
+    "edge_strength": {
+      "mean": 0.3440802743961576,
+      "std": 0.20201262371087653
+    },
+    "blocking": {
+      "mean": 1.0311079010086532,
+      "std": 0.02320905826861318
+    },
+    "detail": {
+      "mean": 0.10256935244628947,
+      "std": 0.05932670015304904
+    },
+    "texture_quality": {
+      "mean": 0.8625145784794747,
+      "std": 0.03357255404590746
+    },
+    "ringing": {
+      "mean": 0.13499750986024286,
+      "std": 0.05621613396925496
+    },
+    "colorfulness": {
+      "mean": 64.53747449976728,
+      "std": 18.664092969623933
+    },
+    "naturalness": {
+      "mean": -0.3546692932521225,
+      "std": 0.12823613640596657
+    },
+    "crushed_blacks": {
+      "mean": 0.058815202361161674,
+      "std": 0.08273155959829599
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "temporal_stability": {
+      "mean": 0.11769211153694217,
+      "std": 0.09112820499326402
+    },
+    "n_frames": 594,
+    "_source_file": "twister_jvctbc1_pcAuto_r3On_svideo_direct_b2_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "jvctbc1_pcEdit_r3Off_b2": {
+    "sharpness": {
+      "mean": 0.014264613347772766,
+      "std": 0.015147091365129345
+    },
+    "edge_strength": {
+      "mean": 0.3818528897201274,
+      "std": 0.20718708824337675
+    },
+    "blocking": {
+      "mean": 1.0402119129754501,
+      "std": 0.023240012493921727
+    },
+    "detail": {
+      "mean": 0.11255145784409484,
+      "std": 0.06216940936168645
+    },
+    "texture_quality": {
+      "mean": 0.8219627898232766,
+      "std": 0.03758728734306573
+    },
+    "ringing": {
+      "mean": 0.13579618097679486,
+      "std": 0.05606925519535284
+    },
+    "colorfulness": {
+      "mean": 66.15176137246037,
+      "std": 19.012118947439273
+    },
+    "naturalness": {
+      "mean": -0.43195010705222714,
+      "std": 0.1070397746117843
+    },
+    "crushed_blacks": {
+      "mean": 0.05643522136901917,
+      "std": 0.07446908088848628
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "temporal_stability": {
+      "mean": 0.12489586846622858,
+      "std": 0.09028913682963936
+    },
+    "n_frames": 594,
+    "_source_file": "twister_jvctbc1_pcEdit_r3Off_svideo_direct_b2_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "mitsutbc0": {
+    "sharpness": {
+      "mean": 0.01254615155550265,
+      "std": 0.013531851913105936
+    },
+    "edge_strength": {
+      "mean": 0.3605909754932893,
+      "std": 0.19690442959510038
+    },
+    "blocking": {
+      "mean": 1.0323291462917485,
+      "std": 0.02563384908278851
+    },
+    "detail": {
+      "mean": 0.10364042205632026,
+      "std": 0.059257126973989376
+    },
+    "texture_quality": {
+      "mean": 0.8215311150102442,
+      "std": 0.03743297561902613
+    },
+    "ringing": {
+      "mean": 0.13788676917925724,
+      "std": 0.05304161264601313
+    },
+    "colorfulness": {
+      "mean": 36.20682546976219,
+      "std": 10.375289540200814
+    },
+    "naturalness": {
+      "mean": -0.36842222492350607,
+      "std": 0.11569110185148006
+    },
+    "crushed_blacks": {
+      "mean": 0.052640096240609995,
+      "std": 0.06418957616543391
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "temporal_stability": {
+      "mean": 0.10876826376526588,
+      "std": 0.07797590569559854
+    },
+    "n_frames": 594,
+    "_source_file": "twister_mitsutbc0_svideo_direct_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  },
+  "mitsutbc1": {
+    "sharpness": {
+      "mean": 0.014229210469703718,
+      "std": 0.01623173291127408
+    },
+    "edge_strength": {
+      "mean": 0.3804323927902006,
+      "std": 0.211543606060481
+    },
+    "blocking": {
+      "mean": 1.0314464937234677,
+      "std": 0.023966342355300766
+    },
+    "detail": {
+      "mean": 0.11149909430596384,
+      "std": 0.06398567177731082
+    },
+    "texture_quality": {
+      "mean": 0.8338532251779693,
+      "std": 0.03638729180413938
+    },
+    "ringing": {
+      "mean": 0.13176151198164943,
+      "std": 0.05453007171293885
+    },
+    "colorfulness": {
+      "mean": 65.89547521291843,
+      "std": 19.20157370997595
+    },
+    "naturalness": {
+      "mean": -0.3331953478016001,
+      "std": 0.13735161574513846
+    },
+    "crushed_blacks": {
+      "mean": 0.05291669925437642,
+      "std": 0.06407992162724885
+    },
+    "blown_whites": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "temporal_stability": {
+      "mean": 0.11498255469955233,
+      "std": 0.08496947790868807
+    },
+    "n_frames": 594,
+    "_source_file": "twister_mitsutbc1_svideo_direct_trimmed_VIEW_ACTION_SAFE_IVTC.mov"
+  }
+}

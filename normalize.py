@@ -26,8 +26,9 @@ import subprocess
 import sys
 import os
 import glob
-import json
 import numpy as np
+from common import (probe_video, detect_frame_rate, decode_command,
+                    encode_command, read_frame, write_frame)
 
 # === Pixel format constants ===
 BIT_DEPTH = 10
@@ -35,115 +36,43 @@ MAX_VAL = (1 << BIT_DEPTH) - 1   # 1023
 NEUTRAL = 1 << (BIT_DEPTH - 1)    # 512
 
 
-def probe_video(filepath):
-    """Get video width and height via ffprobe."""
-    cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=width,height",
-        "-of", "csv=p=0", filepath
-    ]
-    result = subprocess.check_output(cmd, text=True).strip()
-    w, h = result.split(",")
-    return int(w), int(h)
-
-
-def detect_frame_rate(filepath):
-    """Auto-detect frame rate from a video file using ffprobe.
-
-    Returns frame rate as a string fraction (e.g. '24000/1001' or '60000/1001').
-    """
-    cmd = [
-        "ffprobe", "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=r_frame_rate",
-        "-of", "json",
-        filepath
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"WARNING: ffprobe failed for {filepath}, defaulting to 24000/1001")
-        return "24000/1001"
-
-    info = json.loads(result.stdout)
-    streams = info.get("streams", [])
-    if streams:
-        return streams[0].get("r_frame_rate", "24000/1001")
-    return "24000/1001"
-
-
-def decode_command(filepath):
-    """Build ffmpeg decode command that outputs raw yuv422p10le to pipe."""
-    return [
-        "ffmpeg", "-hide_banner", "-loglevel", "error",
-        "-i", filepath,
-        "-f", "rawvideo", "-pix_fmt", "yuv422p10le",
-        "pipe:1"
-    ]
-
-
-def encode_command(filepath, width, height, frame_rate):
-    """Build ffmpeg encode command that reads raw yuv422p10le from pipe."""
-    return [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "rawvideo", "-pix_fmt", "yuv422p10le",
-        "-s", f"{width}x{height}",
-        "-r", frame_rate,
-        "-i", "pipe:0",
-        "-c:v", "prores_ks", "-profile:v", "3",  # ProRes 422 HQ
-        "-pix_fmt", "yuv422p10le",
-        "-vendor", "apl0",
-        filepath
-    ]
-
-
-def read_frame(pipe, width, height):
-    """Read one raw YUV422p10le frame from pipe. Returns (Y, U, V) or None."""
-    y_size = width * height
-    u_size = (width // 2) * height
-    frame_bytes = (y_size + u_size + u_size) * 2  # 16-bit samples
-    data = pipe.read(frame_bytes)
-    if len(data) < frame_bytes:
-        return None
-    raw = np.frombuffer(data, dtype=np.uint16)
-    y = raw[:y_size].reshape(height, width)
-    u = raw[y_size:y_size + u_size].reshape(height, width // 2)
-    v = raw[y_size + u_size:].reshape(height, width // 2)
-    return y, u, v
-
-
-def write_frame(pipe, y, u, v):
-    """Write one raw YUV422p10le frame to pipe."""
-    pipe.write(y.tobytes())
-    pipe.write(u.tobytes())
-    pipe.write(v.tobytes())
-
-
 def compute_reference_stats(ref_path, width, height):
     """Compute reference clip's average Y histogram CDF and mean chroma saturation."""
     print(f"  Computing reference stats from: {os.path.basename(ref_path)}")
     proc = subprocess.Popen(decode_command(ref_path), stdout=subprocess.PIPE)
+    try:
+        hist_accum = np.zeros(MAX_VAL + 1, dtype=np.float64)
+        sat_sum = 0.0
+        sat_count = 0
+        n_frames = 0
 
-    hist_accum = np.zeros(MAX_VAL + 1, dtype=np.float64)
-    sat_sum = 0.0
-    sat_count = 0
-    n_frames = 0
+        while True:
+            frame = read_frame(proc.stdout, width, height)
+            if frame is None:
+                break
+            y, u, v = frame
+            hist, _ = np.histogram(y, bins=MAX_VAL + 1, range=(0, MAX_VAL + 1))
+            hist_accum += hist.astype(np.float64)
+            u_f = u.astype(np.float64) - NEUTRAL
+            v_f = v.astype(np.float64) - NEUTRAL
+            sat = np.sqrt(u_f * u_f + v_f * v_f)
+            sat_sum += sat.sum()
+            sat_count += sat.size
+            n_frames += 1
 
-    while True:
-        frame = read_frame(proc.stdout, width, height)
-        if frame is None:
-            break
-        y, u, v = frame
-        hist, _ = np.histogram(y, bins=MAX_VAL + 1, range=(0, MAX_VAL + 1))
-        hist_accum += hist.astype(np.float64)
-        u_f = u.astype(np.float64) - NEUTRAL
-        v_f = v.astype(np.float64) - NEUTRAL
-        sat = np.sqrt(u_f * u_f + v_f * v_f)
-        sat_sum += sat.sum()
-        sat_count += sat.size
-        n_frames += 1
-
-    proc.wait()
+        proc.wait()
+    finally:
+        proc.stdout.close()
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        proc.wait()
     print(f"  Reference: {n_frames} frames processed")
+
+    if n_frames == 0:
+        print("  ERROR: No frames decoded for reference clip")
+        sys.exit(1)
 
     avg_hist = hist_accum / n_frames
     cdf = np.cumsum(avg_hist)
@@ -173,26 +102,38 @@ def normalize_clip(src_path, out_path, ref_cdf, ref_mean_sat, width, height, fra
 
     # First pass: compute source clip's average Y CDF and mean saturation
     proc_r = subprocess.Popen(decode_command(src_path), stdout=subprocess.PIPE)
-    src_hist_accum = np.zeros(MAX_VAL + 1, dtype=np.float64)
-    src_sat_sum = 0.0
-    src_sat_count = 0
-    n_frames = 0
+    try:
+        src_hist_accum = np.zeros(MAX_VAL + 1, dtype=np.float64)
+        src_sat_sum = 0.0
+        src_sat_count = 0
+        n_frames = 0
 
-    while True:
-        frame = read_frame(proc_r.stdout, width, height)
-        if frame is None:
-            break
-        y, u, v = frame
-        hist, _ = np.histogram(y, bins=MAX_VAL + 1, range=(0, MAX_VAL + 1))
-        src_hist_accum += hist.astype(np.float64)
-        u_f = u.astype(np.float64) - NEUTRAL
-        v_f = v.astype(np.float64) - NEUTRAL
-        sat = np.sqrt(u_f * u_f + v_f * v_f)
-        src_sat_sum += sat.sum()
-        src_sat_count += sat.size
-        n_frames += 1
+        while True:
+            frame = read_frame(proc_r.stdout, width, height)
+            if frame is None:
+                break
+            y, u, v = frame
+            hist, _ = np.histogram(y, bins=MAX_VAL + 1, range=(0, MAX_VAL + 1))
+            src_hist_accum += hist.astype(np.float64)
+            u_f = u.astype(np.float64) - NEUTRAL
+            v_f = v.astype(np.float64) - NEUTRAL
+            sat = np.sqrt(u_f * u_f + v_f * v_f)
+            src_sat_sum += sat.sum()
+            src_sat_count += sat.size
+            n_frames += 1
 
-    proc_r.wait()
+        proc_r.wait()
+    finally:
+        proc_r.stdout.close()
+        try:
+            proc_r.kill()
+        except OSError:
+            pass
+        proc_r.wait()
+
+    if n_frames == 0:
+        print(f"    ERROR: No frames decoded for {src_path}")
+        return False
 
     src_avg_hist = src_hist_accum / n_frames
     src_cdf = np.cumsum(src_avg_hist)
@@ -212,24 +153,36 @@ def normalize_clip(src_path, out_path, ref_cdf, ref_mean_sat, width, height, fra
     # Second pass: apply LUT and chroma scaling, encode output
     proc_dec = subprocess.Popen(decode_command(src_path), stdout=subprocess.PIPE)
     proc_enc = subprocess.Popen(encode_command(out_path, width, height, frame_rate), stdin=subprocess.PIPE)
+    try:
+        frame_num = 0
+        while True:
+            frame = read_frame(proc_dec.stdout, width, height)
+            if frame is None:
+                break
+            y, u, v = frame
+            y_out = lut[y]
+            u_f = u.astype(np.float64) - NEUTRAL
+            v_f = v.astype(np.float64) - NEUTRAL
+            u_out = np.clip(NEUTRAL + u_f * chroma_scale, 0, MAX_VAL).astype(np.uint16)
+            v_out = np.clip(NEUTRAL + v_f * chroma_scale, 0, MAX_VAL).astype(np.uint16)
+            write_frame(proc_enc.stdin, y_out, u_out, v_out)
+            frame_num += 1
 
-    frame_num = 0
-    while True:
-        frame = read_frame(proc_dec.stdout, width, height)
-        if frame is None:
-            break
-        y, u, v = frame
-        y_out = lut[y]
-        u_f = u.astype(np.float64) - NEUTRAL
-        v_f = v.astype(np.float64) - NEUTRAL
-        u_out = np.clip(NEUTRAL + u_f * chroma_scale, 0, MAX_VAL).astype(np.uint16)
-        v_out = np.clip(NEUTRAL + v_f * chroma_scale, 0, MAX_VAL).astype(np.uint16)
-        write_frame(proc_enc.stdin, y_out, u_out, v_out)
-        frame_num += 1
-
-    proc_enc.stdin.close()
-    proc_dec.wait()
-    proc_enc.wait()
+        proc_enc.stdin.close()
+        proc_dec.wait()
+        proc_enc.wait()
+    finally:
+        proc_dec.stdout.close()
+        try:
+            proc_dec.kill()
+        except OSError:
+            pass
+        try:
+            proc_enc.kill()
+        except OSError:
+            pass
+        proc_dec.wait()
+        proc_enc.wait()
 
     if proc_enc.returncode != 0:
         print(f"    ERROR: encode failed for {clip_name}")
@@ -245,18 +198,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
-    parser.add_argument("src_dir", help="Directory containing .mov files to normalize")
+    parser.add_argument("src_dir", help="Directory containing video files to normalize")
     parser.add_argument("--reference", help="Reference clip basename (default: first alphabetically)")
     parser.add_argument("--output-dir", help="Output directory (default: <src_dir>/normalized/)")
+    parser.add_argument("--pattern", default="*.mov",
+                        help="File glob pattern (default: %(default)s)")
     args = parser.parse_args()
 
     src_dir = args.src_dir.rstrip("/")
     out_dir = args.output_dir or os.path.join(src_dir, "normalized")
     os.makedirs(out_dir, exist_ok=True)
 
-    clips = sorted(glob.glob(os.path.join(src_dir, "*.mov")))
+    clips = sorted(glob.glob(os.path.join(src_dir, args.pattern)))
     if not clips:
-        print(f"ERROR: No .mov files found in {src_dir}")
+        print(f"ERROR: No files matching '{args.pattern}' found in {src_dir}")
         sys.exit(1)
 
     print(f"Found {len(clips)} clips in {src_dir}")
@@ -296,7 +251,8 @@ def main():
     print(f"\n=== Normalizing {len(clips)} Clips ===")
     for i, clip_path in enumerate(clips, 1):
         clip_name = os.path.basename(clip_path)
-        out_name = clip_name.replace(".mov", "_normalized.mov")
+        base, ext = os.path.splitext(clip_name)
+        out_name = f"{base}_normalized{ext}"
         out_path = os.path.join(out_dir, out_name)
 
         print(f"\n[{i}/{len(clips)}]")

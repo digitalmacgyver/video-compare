@@ -9,6 +9,7 @@ Exit code 0 if all tests pass, 1 otherwise.
 """
 
 import sys, os
+import math
 import numpy as np
 import cv2
 
@@ -25,6 +26,10 @@ from quality_report import (
     naturalness_nss,
     crushed_blacks,
     blown_whites,
+    compute_composites,
+    short_name,
+    ALL_KEYS,
+    METRIC_INFO,
 )
 
 SIZE = 512
@@ -371,6 +376,241 @@ def run_tests():
     return results
 
 
+# ---------------------------------------------------------------------------
+# Phase 1.3: Baseline regression tests (should always pass)
+# ---------------------------------------------------------------------------
+
+# Luma metrics that take a single yf frame
+LUMA_METRICS = [
+    ("sharpness",       sharpness_laplacian),
+    ("edge_strength",   edge_strength_sobel),
+    ("blocking",        blocking_artifact_measure),
+    ("detail",          detail_texture),
+    ("texture_quality", texture_quality_measure),
+    ("ringing",         ringing_measure),
+    ("naturalness",     naturalness_nss),
+    ("crushed_blacks",  crushed_blacks),
+    ("blown_whites",    blown_whites),
+]
+
+
+def run_edge_case_tests():
+    """Test all metrics with degenerate inputs: all-black, all-white, constant gray.
+
+    Verifies: no exceptions, no NaN, no Inf for any metric.
+    """
+    results = []
+    frames = {
+        "all_black":     np.zeros((64, 64), dtype=np.float64),
+        "all_white":     np.ones((64, 64), dtype=np.float64),
+        "constant_gray": np.full((64, 64), 0.5, dtype=np.float64),
+    }
+
+    for frame_name, frame in frames.items():
+        for metric_name, func in LUMA_METRICS:
+            try:
+                val = func(frame)
+                ok = math.isfinite(val)
+            except Exception as e:
+                val = float('nan')
+                ok = False
+            results.append(("Edge: " + frame_name, metric_name, val, 0.0, "finite", ok))
+
+        # Colorfulness with neutral chroma (512 = midpoint)
+        cb_neutral = np.full((64, 32), 512, dtype=np.uint16)
+        cr_neutral = np.full((64, 32), 512, dtype=np.uint16)
+        try:
+            val = colorfulness_metric(cb_neutral, cr_neutral)
+            ok = math.isfinite(val)
+        except Exception as e:
+            val = float('nan')
+            ok = False
+        results.append(("Edge: " + frame_name, "colorfulness", val, 0.0, "finite", ok))
+
+    return results
+
+
+def run_brightness_invariance_tests():
+    """Test brightness invariance for metrics not covered by the original suite.
+
+    Original suite tests: detail, sharpness, edge_strength (multiplicative 0.3x).
+    This adds: blocking, texture_quality.
+    Ringing is excluded -- its Canny edge detection has known brightness dependence
+    (8-bit quantization, documented in metric_implementation.md §6).
+    """
+    results = []
+
+    # Blocking: use a textured scene with mild JPEG blocking (Q=30).
+    # Q=5 is too extreme -- within-block diffs go to zero, breaking the
+    # ratio metric's epsilon guard.  Q=30 has visible blocking but
+    # non-zero within-block gradients, so the ratio cancels properly.
+    tex_scene = gen_texture_gratings()
+    enc_ok, buf = cv2.imencode(".jpg", (tex_scene * 255).astype(np.uint8),
+                                [cv2.IMWRITE_JPEG_QUALITY, 30])
+    blocked = cv2.imdecode(buf, cv2.IMREAD_GRAYSCALE).astype(np.float64) / 255.0
+    blocked_dim = np.clip(blocked * 0.5, 0, 1)
+
+    v_normal = blocking_artifact_measure(blocked)
+    v_dim = blocking_artifact_measure(blocked_dim)
+    rel_diff = abs(v_normal - v_dim) / (abs(v_normal) + 1e-10)
+    # Blocking is a ratio metric -- inherently scale-invariant.
+    # Use 5% tolerance.
+    passed = rel_diff < 0.05
+    results.append(("Bright. Inv.", "blocking", v_normal, v_dim, "~equal", passed))
+
+    # Texture quality: structured gratings at two brightness levels
+    tex = gen_texture_gratings()
+    tex_dim = np.clip(tex * 0.5, 0, 1)
+    v_normal = texture_quality_measure(tex)
+    v_dim = texture_quality_measure(tex_dim)
+    rel_diff = abs(v_normal - v_dim) / (abs(v_normal) + 1e-10)
+    passed = rel_diff < 0.05
+    results.append(("Bright. Inv.", "texture_quality", v_normal, v_dim, "~equal", passed))
+
+    return results
+
+
+def run_short_name_tests():
+    """Test short_name() extracts device names correctly."""
+    results = []
+
+    cases = [
+        # (input_path, expected_output)
+        ("twister_jvctbc1_svideo_direct.mov",    "jvctbc1"),
+        ("twister_ag1980p_svideo_sdi1.mov",      "ag1980p"),
+        ("twister_es15_svideo_sdi.mov",           "es15"),
+        ("device_trimmed_VIEW_ACTION_SAFE_IVTC.mov",  "device"),
+        ("device_trimmed_VIEW_ACTION_SAFE_NOIVTC.mov", "device"),
+        ("ag1980tbc0 machhd 02.mov",              "ag1980tbc0"),
+        ("simple.mov",                             "simple"),
+        ("twister_device_normalized.mov",          "device"),
+    ]
+
+    for input_path, expected in cases:
+        actual = short_name(input_path)
+        passed = actual == expected
+        # Use the result tuple format: (test_name, metric_name, v_good, v_bad, expect, passed)
+        # Repurpose fields: v_good=actual, v_bad=0 (unused), expect=expected
+        results.append(("short_name", f"'{input_path[:25]}'", 0.0, 0.0, expected, passed))
+        if not passed:
+            print(f"  short_name('{input_path}') = '{actual}', expected '{expected}'")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.4: Bug-demonstrating tests (expected to FAIL before Phase 2 fixes)
+# ---------------------------------------------------------------------------
+
+def make_composite_data(clip_metrics):
+    """Build a data dict suitable for compute_composites().
+
+    clip_metrics: dict of {clip_name: {metric_key: value}}
+    Returns dict of {clip_name: {metric_key: {"mean": value, "std": 0.0}}}
+    """
+    data = {}
+    for clip_name, metrics in clip_metrics.items():
+        data[clip_name] = {}
+        for key in ALL_KEYS:
+            val = metrics.get(key, 0.5)
+            data[clip_name][key] = {"mean": val, "std": 0.0}
+    return data
+
+
+def run_known_bug_tests():
+    """Tests for known bugs. These are expected to FAIL before Phase 2 fixes.
+
+    After Phase 2, they should all PASS.
+    """
+    results = []
+
+    # --- Bug test 1: Tied ranks should be equal ---
+    # Two clips with identical sharpness should get the same rank.
+    clip_metrics = {
+        "clip_a": {"sharpness": 10.0, "edge_strength": 0.5, "blocking": 1.0,
+                    "detail": 0.3, "texture_quality": 0.8, "ringing": 0.1,
+                    "temporal_stability": 0.02, "colorfulness": 100.0,
+                    "naturalness": 2.0, "crushed_blacks": 0.05, "blown_whites": 0.0},
+        "clip_b": {"sharpness": 10.0, "edge_strength": 0.6, "blocking": 1.1,
+                    "detail": 0.4, "texture_quality": 0.7, "ringing": 0.15,
+                    "temporal_stability": 0.03, "colorfulness": 110.0,
+                    "naturalness": 1.5, "crushed_blacks": 0.03, "blown_whites": 0.0},
+        "clip_c": {"sharpness": 5.0, "edge_strength": 0.4, "blocking": 1.2,
+                    "detail": 0.2, "texture_quality": 0.6, "ringing": 0.2,
+                    "temporal_stability": 0.05, "colorfulness": 80.0,
+                    "naturalness": 1.0, "crushed_blacks": 0.08, "blown_whites": 0.01},
+    }
+    data = make_composite_data(clip_metrics)
+    composites = compute_composites(data)
+
+    # clip_a and clip_b have identical sharpness (10.0) — they should get equal rank
+    rank_a = composites["clip_a"]["ranks"]["sharpness"]
+    rank_b = composites["clip_b"]["ranks"]["sharpness"]
+    passed = rank_a == rank_b
+    results.append(("Tied Ranks", "sharpness equal",
+                    float(rank_a), float(rank_b), "equal", passed))
+
+    # Both also have identical blown_whites (0.0) — should get equal rank
+    rank_a_bw = composites["clip_a"]["ranks"]["blown_whites"]
+    rank_b_bw = composites["clip_b"]["ranks"]["blown_whites"]
+    passed = rank_a_bw == rank_b_bw
+    results.append(("Tied Ranks", "blown_whites eq",
+                    float(rank_a_bw), float(rank_b_bw), "equal", passed))
+
+    # --- Bug test 2: All-equal values should all get same rank ---
+    all_same = {
+        "clip_x": {k: 5.0 for k in ALL_KEYS},
+        "clip_y": {k: 5.0 for k in ALL_KEYS},
+        "clip_z": {k: 5.0 for k in ALL_KEYS},
+    }
+    data_eq = make_composite_data(all_same)
+    comp_eq = compute_composites(data_eq)
+
+    # All three clips should have identical overall rank
+    overall_x = comp_eq["clip_x"]["overall"]
+    overall_y = comp_eq["clip_y"]["overall"]
+    overall_z = comp_eq["clip_z"]["overall"]
+    passed = (overall_x == overall_y == overall_z)
+    results.append(("All-Equal", "overall rank",
+                    overall_x, overall_y, "all same", passed))
+
+    # Each clip should have rank 2.0 on every metric (average of 1,2,3)
+    rank_x_sharp = comp_eq["clip_x"]["ranks"]["sharpness"]
+    passed = (rank_x_sharp == 2.0)
+    results.append(("All-Equal", "sharpness=2.0",
+                    float(rank_x_sharp), 2.0, "=2.0", passed))
+
+    # --- Bug test 3: Discrimination gating ---
+    # Make a dataset where blown_whites is constant (0.0) for all clips
+    # but other metrics vary.  blown_whites should be in non_discriminating.
+    disc_metrics = {
+        "clip_p": {"sharpness": 15.0, "edge_strength": 0.8, "blocking": 1.0,
+                    "detail": 0.5, "texture_quality": 0.9, "ringing": 0.05,
+                    "temporal_stability": 0.01, "colorfulness": 120.0,
+                    "naturalness": 3.0, "crushed_blacks": 0.03, "blown_whites": 0.0},
+        "clip_q": {"sharpness": 8.0, "edge_strength": 0.5, "blocking": 1.2,
+                    "detail": 0.3, "texture_quality": 0.7, "ringing": 0.1,
+                    "temporal_stability": 0.03, "colorfulness": 90.0,
+                    "naturalness": 1.5, "crushed_blacks": 0.06, "blown_whites": 0.0},
+        "clip_r": {"sharpness": 5.0, "edge_strength": 0.3, "blocking": 1.5,
+                    "detail": 0.2, "texture_quality": 0.5, "ringing": 0.15,
+                    "temporal_stability": 0.06, "colorfulness": 60.0,
+                    "naturalness": 0.8, "crushed_blacks": 0.10, "blown_whites": 0.0},
+    }
+    disc_data = make_composite_data(disc_metrics)
+    disc_comp = compute_composites(disc_data)
+    non_disc = disc_comp["clip_p"]["non_discriminating"]
+    passed = "blown_whites" in non_disc
+    results.append(("Disc. Gating", "blown_whites excluded",
+                    float(len(non_disc)), 1.0, "in list", passed))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Output formatting and main
+# ---------------------------------------------------------------------------
+
 def fmt_val(v):
     """Format a metric value for the results table."""
     if abs(v) >= 1000:
@@ -378,10 +618,10 @@ def fmt_val(v):
     return f"{v:>14.6f}"
 
 
-def print_results(results):
+def print_results(results, title="METRIC VALIDATION RESULTS"):
     w = 95
     print("=" * w)
-    print("METRIC VALIDATION RESULTS")
+    print(title)
     print("=" * w)
     hdr = f"{'Test':<23}{'Metric':<20}{'Good':>14}{'Bad':>14}   {'Expect':<8}{'Result'}"
     print(hdr)
@@ -394,11 +634,27 @@ def print_results(results):
         print(f"{test_name:<23}{metric:<20}{fmt_val(v_good)}{fmt_val(v_bad)}   {expect:<8}{tag}")
     print("-" * w)
     print(f"{n_pass}/{len(results)} tests passed.")
-    print(f"\nTest assets saved to: {ASSETS}")
     return n_pass == len(results)
 
 
 if __name__ == "__main__":
+    # --- Main tests (must all pass) ---
     results = run_tests()
+    results += run_edge_case_tests()
+    results += run_brightness_invariance_tests()
+    results += run_short_name_tests()
     all_pass = print_results(results)
+    print(f"\nTest assets saved to: {ASSETS}")
+
+    # --- Known-bug tests (expected to fail before Phase 2 fixes) ---
+    print()
+    bug_results = run_known_bug_tests()
+    print_results(bug_results, title="KNOWN BUG TESTS (expected to fail before Phase 2)")
+    bug_pass = sum(1 for r in bug_results if r[5])
+    if bug_pass == len(bug_results):
+        print("  All bug tests pass — Phase 2 fixes are in place.")
+    else:
+        print(f"  {len(bug_results) - bug_pass} expected failures — fixes pending (Phase 2).")
+
+    # Exit code based only on main tests
     sys.exit(0 if all_pass else 1)

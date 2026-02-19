@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """No-reference video quality metrics for analog video capture comparison.
 
-Analyzes a directory of normalized ProRes 422 HQ clips (576x436, 10-bit
-yuv422p10le) and produces JSON data, an interactive HTML report with
-Chart.js visualizations, and optionally a plain-text report.
+Analyzes a directory of video clips (resolution auto-detected via ffprobe)
+and produces JSON data, an interactive HTML report with Chart.js
+visualizations, and optionally a plain-text report.
 
 Usage:
     python quality_report.py <src_dir> [options]
@@ -45,51 +45,11 @@ import glob
 import json
 import re
 import base64
+from datetime import datetime
 import numpy as np
 import cv2
-from scipy import ndimage
-
-# =====================================================================
-# VIDEO PROBING
-# =====================================================================
-
-def probe_video(filepath):
-    """Get video width and height via ffprobe."""
-    cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=width,height",
-        "-of", "csv=p=0", filepath
-    ]
-    result = subprocess.check_output(cmd, text=True).strip()
-    w, h = result.split(",")
-    return int(w), int(h)
-
-# =====================================================================
-# METRIC METADATA
-# =====================================================================
-
-ALL_KEYS = [
-    "sharpness", "edge_strength", "blocking", "detail", "texture_quality",
-    "ringing", "temporal_stability", "colorfulness", "naturalness",
-    "crushed_blacks", "blown_whites",
-]
-
-# Metrics still computed but excluded from scoring (low discrimination or redundant)
-_DROPPED_KEYS = ["noise", "contrast", "tonal_richness", "grad_smoothness"]
-
-METRIC_INFO = {
-    "sharpness":          ("Sharpness",      "Laplacian CV\u00b2",   True),
-    "edge_strength":      ("Edge Strength",  "Sobel norm.",          True),
-    "blocking":           ("Blocking",       "8x8 grid ratio",      None),
-    "detail":             ("Detail",         "local CV median",      True),
-    "texture_quality":    ("Texture Q",      "structure ratio",      True),
-    "ringing":            ("Ringing",        "edge overshoot norm.", False),
-    "temporal_stability": ("Temporal",       "frame diff norm.",     False),
-    "colorfulness":       ("Colorfulness",   "Hasler-S. M",          True),
-    "naturalness":        ("Naturalness",    "MSCN kurtosis",        True),
-    "crushed_blacks":     ("Crushed Blacks", "shadow headroom",     False),
-    "blown_whites":       ("Blown Whites",   "highlight headroom",  False),
-}
+from common import (ALL_KEYS, METRIC_INFO, COLORS_7, COLORS_14,
+                    compute_composites, probe_video, decode_command, read_frame)
 
 CMP_ICON_SVG = ('<svg viewBox="0 0 24 24" width="20" height="20" fill="none" '
     'stroke="currentColor" stroke-width="2" stroke-linecap="round">'
@@ -99,37 +59,6 @@ CMP_ICON_SVG = ('<svg viewBox="0 0 24 24" width="20" height="20" fill="none" '
     'font-size="8" font-family="sans-serif" font-weight="bold">A</text>'
     '<text x="17" y="15.5" text-anchor="middle" fill="currentColor" stroke="none" '
     'font-size="8" font-family="sans-serif" font-weight="bold">B</text></svg>')
-
-COLORS_7  = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#42d4f4", "#f58231", "#911eb4"]
-COLORS_14 = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4", "#42d4f4",
-             "#f032e6", "#bfef45", "#fabed4", "#469990", "#dcbeff", "#9A6324", "#800000"]
-
-# =====================================================================
-# FRAME I/O
-# =====================================================================
-
-def decode_command(filepath):
-    return [
-        "ffmpeg", "-hide_banner", "-loglevel", "error",
-        "-i", filepath,
-        "-f", "rawvideo", "-pix_fmt", "yuv422p10le",
-        "pipe:1"
-    ]
-
-
-def read_frame(pipe, width, height):
-    """Read one YUV422p10le frame from pipe. Returns (Y, U, V) or None at EOF."""
-    y_size = width * height
-    u_size = (width // 2) * height
-    frame_bytes = (y_size + u_size + u_size) * 2  # 16-bit samples
-    data = pipe.read(frame_bytes)
-    if len(data) < frame_bytes:
-        return None
-    raw = np.frombuffer(data, dtype=np.uint16)
-    y = raw[:y_size].reshape(height, width)
-    u = raw[y_size:y_size + u_size].reshape(height, width // 2)
-    v = raw[y_size + u_size:].reshape(height, width // 2)
-    return y, u, v
 
 
 def to_float(y):
@@ -155,40 +84,6 @@ def edge_strength_sobel(yf):
     return np.mean(np.sqrt(sx * sx + sy * sy)) / (mean_y + 1e-10)
 
 
-def noise_estimate(yf):
-    """Noise estimate on flat/smooth regions only.
-
-    Identifies low-gradient patches (flat areas) and measures high-frequency
-    energy there. Avoids confusing blur with low noise.
-    """
-    block = 16
-    h, w = yf.shape
-    kernel = np.array([[1, -2, 1], [-2, 4, -2], [1, -2, 1]], dtype=np.float64)
-    filtered = ndimage.convolve(yf, kernel)
-    sx = cv2.Sobel(yf, cv2.CV_64F, 1, 0, ksize=3)
-    sy = cv2.Sobel(yf, cv2.CV_64F, 0, 1, ksize=3)
-    grad_mag = np.sqrt(sx * sx + sy * sy)
-
-    noise_vals = []
-    for r in range(0, h - block + 1, block):
-        for c in range(0, w - block + 1, block):
-            if np.mean(grad_mag[r:r+block, c:c+block]) < 0.03:
-                patch = filtered[r:r+block, c:c+block]
-                noise_vals.append(np.sqrt(np.pi / 2.0) * np.mean(np.abs(patch)) / 6.0)
-
-    if len(noise_vals) < 5:
-        block_grads = []
-        for r in range(0, h - block + 1, block):
-            for c in range(0, w - block + 1, block):
-                mg = np.mean(grad_mag[r:r+block, c:c+block])
-                patch = filtered[r:r+block, c:c+block]
-                sigma = np.sqrt(np.pi / 2.0) * np.mean(np.abs(patch)) / 6.0
-                block_grads.append((mg, sigma))
-        block_grads.sort(key=lambda x: x[0])
-        noise_vals = [s for _, s in block_grads[:max(5, len(block_grads) // 5)]]
-
-    return np.median(noise_vals)
-
 
 def blocking_artifact_measure(yf):
     """Detect 8x8 DCT blocking artifacts. Ratio > 1.0 = blocking present."""
@@ -208,14 +103,18 @@ def detail_texture(yf):
     """Median local coefficient of variation in 16x16 blocks — brightness-agnostic detail."""
     block = 16
     h, w = yf.shape
-    cvs = []
-    for r in range(0, h - block + 1, block):
-        for c in range(0, w - block + 1, block):
-            blk = yf[r:r+block, c:c+block]
-            mu = np.mean(blk)
-            if mu > 0.01:  # skip truly black blocks
-                cvs.append(np.std(blk) / mu)
-    return float(np.median(cvs)) if cvs else 0.0
+    nh, nw = h // block, w // block
+    if nh == 0 or nw == 0:
+        return 0.0
+    cropped = yf[:nh * block, :nw * block]
+    blocks = cropped.reshape(nh, block, nw, block).transpose(0, 2, 1, 3).reshape(-1, block, block)
+    means = blocks.mean(axis=(1, 2))
+    stds = blocks.std(axis=(1, 2))
+    mask = means > 0.01  # skip truly black blocks
+    if not mask.any():
+        return 0.0
+    cvs = stds[mask] / means[mask]
+    return float(np.median(cvs))
 
 
 def texture_quality_measure(yf):
@@ -227,17 +126,21 @@ def texture_quality_measure(yf):
     """
     block = 16
     h, w = yf.shape
+    nh, nw = h // block, w // block
+    if nh == 0 or nw == 0:
+        return 0.5
     yf_smooth = cv2.GaussianBlur(yf, (5, 5), 1.0)
-
-    ratios = []
-    for r in range(0, h - block + 1, block):
-        for c in range(0, w - block + 1, block):
-            var_orig = np.var(yf[r:r+block, c:c+block])
-            var_smooth = np.var(yf_smooth[r:r+block, c:c+block])
-            if var_orig > 1e-8:
-                ratios.append(var_smooth / var_orig)
-
-    return float(np.median(ratios)) if len(ratios) >= 5 else 0.5
+    cropped = yf[:nh * block, :nw * block]
+    cropped_s = yf_smooth[:nh * block, :nw * block]
+    blocks_o = cropped.reshape(nh, block, nw, block).transpose(0, 2, 1, 3).reshape(-1, block, block)
+    blocks_s = cropped_s.reshape(nh, block, nw, block).transpose(0, 2, 1, 3).reshape(-1, block, block)
+    var_orig = blocks_o.var(axis=(1, 2))
+    var_smooth = blocks_s.var(axis=(1, 2))
+    mask = var_orig > 1e-8
+    if mask.sum() < 5:
+        return 0.5
+    ratios = var_smooth[mask] / var_orig[mask]
+    return float(np.median(ratios))
 
 
 def ringing_measure(yf):
@@ -252,14 +155,6 @@ def ringing_measure(yf):
     mean_y = np.mean(yf)
     return np.mean(np.abs(cv2.Laplacian(yf, cv2.CV_64F))[near_edge_only > 0]) / (mean_y + 1e-10)
 
-
-# =====================================================================
-# PERCEPTUAL METRICS
-# =====================================================================
-
-def perceptual_contrast(yf):
-    """RMS contrast — correlates with perceived 'punch'."""
-    return float(np.std(yf))
 
 
 def colorfulness_metric(u, v):
@@ -303,13 +198,6 @@ def blown_whites(yf):
     return float(np.count_nonzero(yf > BLOW_CEIL)) / float(n_highlight)
 
 
-def tonal_richness(yf):
-    """Histogram entropy of Y — measures tonal gradation quality."""
-    hist, _ = np.histogram(yf.ravel(), bins=256, range=(0.0, 1.0))
-    p = hist.astype(np.float64) / hist.sum()
-    p = p[p > 0]
-    return float(-np.sum(p * np.log2(p)))
-
 
 def naturalness_nss(yf):
     """MSCN kurtosis — natural/film-like signal statistics."""
@@ -324,26 +212,6 @@ def naturalness_nss(yf):
         return 0.0
     return float(np.mean(((data - np.mean(data)) / s) ** 4) - 3.0)
 
-
-def gradient_smoothness(yf):
-    """Smoothness of tonal gradients — inverse of banding tendency."""
-    block = 32
-    h, w = yf.shape
-    sx = cv2.Sobel(yf, cv2.CV_64F, 1, 0, ksize=3)
-    sy = cv2.Sobel(yf, cv2.CV_64F, 0, 1, ksize=3)
-    grad_mag = np.sqrt(sx * sx + sy * sy)
-    gsx = cv2.Sobel(grad_mag, cv2.CV_64F, 1, 0, ksize=3)
-    gsy = cv2.Sobel(grad_mag, cv2.CV_64F, 0, 1, ksize=3)
-    grad2_mag = np.sqrt(gsx * gsx + gsy * gsy)
-
-    smoothness_vals = []
-    for r in range(0, h - block + 1, block):
-        for c in range(0, w - block + 1, block):
-            mg = np.mean(grad_mag[r:r+block, c:c+block])
-            if 0.001 < mg < 0.06:
-                smoothness_vals.append(1.0 / (1.0 + np.mean(grad2_mag[r:r+block, c:c+block])))
-
-    return float(np.median(smoothness_vals)) if len(smoothness_vals) >= 3 else 0.5
 
 
 # =====================================================================
@@ -389,37 +257,50 @@ def analyze_clip(filepath, width, height, skip_frames=0):
     prev_yf = None
     n_frames = 0
 
-    # Skip initial frames if requested
-    for _ in range(skip_frames):
-        frame = read_frame(proc.stdout, width, height)
-        if frame is None:
-            break
+    try:
+        # Skip initial frames if requested
+        for _ in range(skip_frames):
+            frame = read_frame(proc.stdout, width, height)
+            if frame is None:
+                break
 
-    while True:
-        frame = read_frame(proc.stdout, width, height)
-        if frame is None:
-            break
-        y, u, v = frame
-        yf = to_float(y)
+        while True:
+            frame = read_frame(proc.stdout, width, height)
+            if frame is None:
+                break
+            y, u, v = frame
+            yf = to_float(y)
 
-        accum["sharpness"].append(sharpness_laplacian(yf))
-        accum["edge_strength"].append(edge_strength_sobel(yf))
-        accum["blocking"].append(blocking_artifact_measure(yf))
-        accum["detail"].append(detail_texture(yf))
-        accum["texture_quality"].append(texture_quality_measure(yf))
-        accum["ringing"].append(ringing_measure(yf))
-        accum["colorfulness"].append(colorfulness_metric(u, v))
-        accum["naturalness"].append(naturalness_nss(yf))
-        accum["crushed_blacks"].append(crushed_blacks(yf))
-        accum["blown_whites"].append(blown_whites(yf))
+            accum["sharpness"].append(sharpness_laplacian(yf))
+            accum["edge_strength"].append(edge_strength_sobel(yf))
+            accum["blocking"].append(blocking_artifact_measure(yf))
+            accum["detail"].append(detail_texture(yf))
+            accum["texture_quality"].append(texture_quality_measure(yf))
+            accum["ringing"].append(ringing_measure(yf))
+            accum["colorfulness"].append(colorfulness_metric(u, v))
+            accum["naturalness"].append(naturalness_nss(yf))
+            accum["crushed_blacks"].append(crushed_blacks(yf))
+            accum["blown_whites"].append(blown_whites(yf))
 
-        if prev_yf is not None:
-            mean_y = 0.5 * (np.mean(yf) + np.mean(prev_yf))
-            temporal_diffs.append(np.mean(np.abs(yf - prev_yf)) / (mean_y + 1e-10))
-        prev_yf = yf
-        n_frames += 1
+            if prev_yf is not None:
+                mean_y = 0.5 * (np.mean(yf) + np.mean(prev_yf))
+                temporal_diffs.append(np.mean(np.abs(yf - prev_yf)) / (mean_y + 1e-10))
+            prev_yf = yf
+            n_frames += 1
+    finally:
+        proc.stdout.close()
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        proc.wait()
 
-    proc.wait()
+    if proc.returncode != 0:
+        print(f"  WARNING: ffmpeg exited with code {proc.returncode} for {filepath}")
+
+    if n_frames == 0:
+        print(f"  ERROR: No frames decoded for {filepath} (skip={skip_frames})")
+        return None, None
 
     result = {}
     for k, vals in accum.items():
@@ -567,59 +448,6 @@ def extract_sample_screenshots(clip_paths, clip_names, n_screenshots, skip_offse
 
 
 # =====================================================================
-# COMPOSITE SCORING
-# =====================================================================
-
-def compute_composites(data):
-    """Compute rank-based overall composite scores.
-
-    For each metric, clips are ranked 1 (best) to N (worst). The overall
-    score is the average rank across all 9 metrics — lower is better.
-    Z-scores are also computed for heatmap cell coloring (positive = good).
-    """
-    clip_names = sorted(data.keys())
-    n = len(clip_names)
-
-    # Z-scores for heatmap cell coloring (sign-flipped so positive = good)
-    zscores = {}
-    for key in ALL_KEYS:
-        arr = np.array([data[c][key]["mean"] for c in clip_names])
-        mu, sigma = np.mean(arr), np.std(arr)
-        zs = (arr - mu) / sigma if sigma > 1e-15 else np.zeros(n)
-        _, _, hb = METRIC_INFO[key]
-        if hb is False:
-            zs = -zs
-        elif hb is None:
-            dist = np.abs(arr - 1.0)
-            d_mu, d_sigma = np.mean(dist), np.std(dist)
-            zs = -(dist - d_mu) / d_sigma if d_sigma > 1e-15 else np.zeros(n)
-        zscores[key] = zs
-
-    # Ranks per metric (1 = best, N = worst)
-    ranks = {}
-    for key in ALL_KEYS:
-        arr = np.array([data[c][key]["mean"] for c in clip_names])
-        _, _, hb = METRIC_INFO[key]
-        if hb is True:
-            order = np.argsort(-arr)
-        elif hb is False:
-            order = np.argsort(arr)
-        else:
-            order = np.argsort(np.abs(arr - 1.0))
-        rank_arr = np.empty(n, dtype=float)
-        for r, idx in enumerate(order, 1):
-            rank_arr[idx] = r
-        ranks[key] = rank_arr
-
-    avg_ranks = np.mean([ranks[k] for k in ALL_KEYS], axis=0)
-
-    return {c: {"overall": float(avg_ranks[i]),
-                "ranks": {k: int(ranks[k][i]) for k in ALL_KEYS},
-                "zscores": {k: float(zscores[k][i]) for k in ALL_KEYS}}
-            for i, c in enumerate(clip_names)}
-
-
-# =====================================================================
 # TEXT REPORT
 # =====================================================================
 
@@ -633,7 +461,7 @@ def format_text_report(all_results, src_dir):
     lines.append(f"NO-REFERENCE VIDEO QUALITY METRICS REPORT")
     lines.append("=" * 120)
     lines.append(f"Source: {src_dir}")
-    lines.append("All clips normalized to common brightness/saturation reference before measurement.")
+    lines.append("All metrics are brightness-agnostic (no upstream normalization required).")
     lines.append("")
 
     for label, keys, headers in [
@@ -827,7 +655,7 @@ HTML_CSS = """
 """
 
 
-def generate_html(data, title="Video Quality Report", comparisons=None, samples=None):
+def generate_html(data, title="Video Quality Report", comparisons=None, samples=None, json_filename=None):
     """Generate a self-contained HTML quality report with Chart.js visualizations."""
     clip_names = sorted(data.keys())
     n = len(clip_names)
@@ -975,12 +803,13 @@ new Chart(document.getElementById('radarChart'),{{
   }}
 }});
 
+function escHtml(s){{var d=document.createElement('div');d.textContent=s;return d.innerHTML;}}
 const hmData={json.dumps(hm_data)};
 const tbody=document.querySelector('#heatmapTable tbody');
 hmData.forEach((row,idx)=>{{
   const tr=document.createElement('tr');
   let td=document.createElement('td');
-  td.innerHTML='<span class="rank">#'+(idx+1)+'</span> '+row.name;
+  td.innerHTML='<span class="rank">#'+(idx+1)+'</span> '+escHtml(row.name);
   tr.appendChild(td);
   td=document.createElement('td');td.textContent=row.overall.toFixed(1);
   const mid=({n}+1)/2, ov=Math.max(-1,Math.min(1,(mid-row.overall)/mid));
@@ -1028,7 +857,7 @@ document.querySelectorAll('.heatmap th').forEach((th,colIdx)=>{{
     }});
     rows.forEach((r,i)=>{{
       const fc=r.cells[0],name=fc.textContent.replace(/^#\\d+\\s*/,'');
-      fc.innerHTML='<span class="rank">#'+(i+1)+'</span> '+name;
+      fc.innerHTML='<span class="rank">#'+(i+1)+'</span> '+escHtml(name);
       tbody.appendChild(r);
     }});
   }});
@@ -1450,6 +1279,10 @@ Click any image to enlarge; use the <span style="display:inline-flex;align-items
 </script>
 """
 
+    if json_filename:
+        html += f'\n<p style="text-align:center; color:#888; font-size:0.85em; margin-top:2em;">Data source: <code>{json_filename}</code></p>\n'
+        html += f'<!-- data-source: {json_filename} -->\n'
+
     html += "</body>\n</html>"
 
     return html
@@ -1528,28 +1361,59 @@ def main():
                 skip = n
                 break
         skip_offsets[name] = skip
+
+        # Detect name collisions and append suffix if needed
+        if name in all_results:
+            orig_name = name
+            suffix = 2
+            while f"{name}_{suffix}" in all_results:
+                suffix += 1
+            name = f"{name}_{suffix}"
+            print(f"  WARNING: Duplicate short name '{orig_name}' from {clip_path}, using '{name}'")
+            skip_offsets[name] = skip_offsets.pop(orig_name, skip)
+
         skip_msg = f", skip {skip}" if skip > 0 else ""
         print(f"[{i:>2}/{len(clips)}] {name}{skip_msg}...", end=" ", flush=True)
         metrics, perframe = analyze_clip(clip_path, vid_w, vid_h, skip_frames=skip)
+
+        if metrics is None:
+            print(f"skipped (no frames decoded)")
+            continue
+
+        metrics["_source_file"] = os.path.basename(clip_path)
         all_results[name] = metrics
         all_perframe[name] = perframe
         print(f"done ({metrics['n_frames']} frames)")
 
-    # JSON output (always)
-    json_path = os.path.join(output_dir, f"{args.name}.json")
+    # JSON output (always) — timestamped filename for provenance
+    run_timestamp = datetime.now()
+    ts_suffix = run_timestamp.strftime("%Y%m%d_%H%M%S")
+    json_output = {
+        "_metadata": {
+            "schema_version": 2,
+            "metrics": list(ALL_KEYS),
+            "n_metrics": len(ALL_KEYS),
+            "source_dir": os.path.abspath(src_dir),
+            "pattern": args.pattern,
+            "skip_frames": dict(skip_patterns),
+            "timestamp": run_timestamp.isoformat(),
+            "json_filename": f"{args.name}_{ts_suffix}.json",
+        }
+    }
+    json_output.update(all_results)
+    json_name = f"{args.name}_{ts_suffix}.json"
+    json_path = os.path.join(output_dir, json_name)
     with open(json_path, "w") as f:
-        json.dump(all_results, f, indent=2)
+        json.dump(json_output, f, indent=2)
     print(f"\nJSON:  {json_path}")
 
     # Extract comparison frames and sample screenshots for HTML
     clip_names = sorted(all_results.keys())
-    comparisons = None
     samples = None
 
-    if args.screenshots > 0 or True:  # always extract comparison frames
-        print("\nExtracting metric comparison frames...")
-        comparisons = find_comparison_frames(clip_paths, clip_names, all_perframe,
-                                             all_results, skip_offsets)
+    print("\nExtracting metric comparison frames...")
+    comparisons = find_comparison_frames(clip_paths, clip_names, all_perframe,
+                                         all_results, skip_offsets)
 
     if args.screenshots > 0:
         print(f"\nExtracting {args.screenshots} sample screenshots per clip...")
@@ -1561,7 +1425,7 @@ def main():
     title = f"Video Quality Report — {display_name}"
     html_path = os.path.join(output_dir, f"{args.name}.html")
     with open(html_path, "w") as f:
-        f.write(generate_html(all_results, title, comparisons, samples))
+        f.write(generate_html(all_results, title, comparisons, samples, json_filename=json_name))
     print(f"HTML:  {html_path}")
 
     # Text output (optional)

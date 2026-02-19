@@ -15,94 +15,13 @@ Examples:
 import argparse
 import json
 import os
+import re
 import sys
 import numpy as np
-
-# =====================================================================
-# METRIC METADATA (shared with quality_report.py)
-# =====================================================================
-
-ALL_KEYS = [
-    "sharpness", "edge_strength", "blocking", "detail", "texture_quality",
-    "ringing", "temporal_stability", "colorfulness", "naturalness",
-    "crushed_blacks", "blown_whites",
-]
-
-METRIC_INFO = {
-    "sharpness":          ("Sharpness",      "Laplacian CV\u00b2",   True),
-    "edge_strength":      ("Edge Strength",  "Sobel norm.",          True),
-    "blocking":           ("Blocking",       "8x8 grid ratio",      None),
-    "detail":             ("Detail",         "local CV median",      True),
-    "texture_quality":    ("Texture Q",      "structure ratio",      True),
-    "ringing":            ("Ringing",        "edge overshoot norm.", False),
-    "temporal_stability": ("Temporal",       "frame diff norm.",     False),
-    "colorfulness":       ("Colorfulness",   "Hasler-S. M",          True),
-    "naturalness":        ("Naturalness",    "MSCN kurtosis",        True),
-    "crushed_blacks":     ("Crushed Blacks", "shadow headroom",     False),
-    "blown_whites":       ("Blown Whites",   "highlight headroom",  False),
-}
-
-COLORS_7  = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#42d4f4", "#f58231", "#911eb4"]
-COLORS_14 = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4", "#42d4f4",
-             "#f032e6", "#bfef45", "#fabed4", "#469990", "#dcbeff", "#9A6324", "#800000"]
+from common import ALL_KEYS, METRIC_INFO, COLORS_7, COLORS_14, compute_composites
 
 CLIP_COLORS = ["#58a6ff", "#3fb950", "#f58231", "#e6194b", "#911eb4",
                "#42d4f4", "#ffe119", "#f032e6", "#bfef45", "#dcbeff"]
-
-# =====================================================================
-# COMPOSITE SCORING
-# =====================================================================
-
-def compute_composites(data):
-    """Compute rank-based overall composite scores.
-
-    For each metric, clips are ranked 1 (best) to N (worst). The overall
-    score is the average rank across all metrics — lower is better.
-    Z-scores are also computed for heatmap cell coloring (positive = good).
-    """
-    clip_names = sorted(data.keys())
-    n = len(clip_names)
-    # Only use metrics present in all clips (backward compat with older JSONs)
-    available = set(ALL_KEYS)
-    for c in clip_names:
-        available &= set(data[c].keys())
-    keys = [k for k in ALL_KEYS if k in available]
-
-    zscores = {}
-    for key in keys:
-        arr = np.array([data[c][key]["mean"] for c in clip_names])
-        mu, sigma = np.mean(arr), np.std(arr)
-        zs = (arr - mu) / sigma if sigma > 1e-15 else np.zeros(n)
-        _, _, hb = METRIC_INFO[key]
-        if hb is False:
-            zs = -zs
-        elif hb is None:
-            dist = np.abs(arr - 1.0)
-            d_mu, d_sigma = np.mean(dist), np.std(dist)
-            zs = -(dist - d_mu) / d_sigma if d_sigma > 1e-15 else np.zeros(n)
-        zscores[key] = zs
-
-    ranks = {}
-    for key in keys:
-        arr = np.array([data[c][key]["mean"] for c in clip_names])
-        _, _, hb = METRIC_INFO[key]
-        if hb is True:
-            order = np.argsort(-arr)
-        elif hb is False:
-            order = np.argsort(arr)
-        else:
-            order = np.argsort(np.abs(arr - 1.0))
-        rank_arr = np.empty(n, dtype=float)
-        for r, idx in enumerate(order, 1):
-            rank_arr[idx] = r
-        ranks[key] = rank_arr
-
-    avg_ranks = np.mean([ranks[k] for k in keys], axis=0)
-
-    return {c: {"overall": float(avg_ranks[i]),
-                "ranks": {k: int(ranks[k][i]) for k in keys},
-                "zscores": {k: float(zscores[k][i]) for k in keys}}
-            for i, c in enumerate(clip_names)}
 
 
 # =====================================================================
@@ -266,7 +185,7 @@ def generate_crossclip_html(all_data, clip_labels):
 <h1>Cross-Clip Quality Comparison</h1>
 <p class="subtitle">
   Performance of {n_dev} capture devices across {n_clip} clips ({clip_list}).
-  Each clip was independently normalized and evaluated on 9 no-reference metrics.
+  Each clip was independently evaluated on {n_metrics} no-reference quality metrics.
 </p>
 
 <h2>Overall Ranking by Clip</h2>
@@ -378,6 +297,7 @@ document.querySelectorAll('.heatmap th').forEach((th,colIdx)=>{{
         n_dev=n_devices,
         n_clip=n_clips,
         clip_list=clip_list_str,
+        n_metrics=len(ALL_KEYS),
         bar_h=bar_height,
         th_metrics="".join(
             '<th>{}</th>'.format(METRIC_INFO[k][0]) for k in active_keys
@@ -418,14 +338,17 @@ def main():
             print(f"ERROR: File not found: {json_path}")
             sys.exit(1)
         label = os.path.splitext(os.path.basename(json_path))[0]
-        # Strip common suffixes for cleaner labels
+        # Strip timestamp suffix (e.g. _20260218_231500) and common suffixes
+        label = re.sub(r'_\d{8}_\d{6}$', '', label)
         for suffix in ["_quality_report", "_report", "_normalized"]:
             label = label.replace(suffix, "")
         with open(json_path) as f:
-            data = json.load(f)
-        # Remove n_frames key from device data (not a metric)
+            raw = json.load(f)
+        # Filter out metadata keys and non-metric fields
+        data = {k: v for k, v in raw.items() if not k.startswith("_")}
         for dev in data:
             data[dev].pop("n_frames", None)
+            data[dev].pop("_source_file", None)
         all_data[label] = data
         clip_labels.append(label)
 

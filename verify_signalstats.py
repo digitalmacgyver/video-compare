@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Run signalstats on normalized clips and print a comparison table."""
 
+import argparse
 import subprocess
 import os
+import sys
 import glob
 import json
-import re
-
-NORM_DIR = "/wintmp/analog_video/noref_compare/normalized"
 
 
 def get_signalstats(filepath):
@@ -48,7 +47,17 @@ def short_name(filepath):
 
 
 def main():
-    clips = sorted(glob.glob(os.path.join(NORM_DIR, "*.mov")))
+    parser = argparse.ArgumentParser(
+        description="Run signalstats on normalized clips and print a comparison table."
+    )
+    parser.add_argument("src_dir", nargs="?",
+                        default="/wintmp/analog_video/noref_compare/normalized",
+                        help="Directory containing clips to verify (default: %(default)s)")
+    parser.add_argument("--pattern", default="*.mov",
+                        help="File glob pattern (default: %(default)s)")
+    args = parser.parse_args()
+
+    clips = sorted(glob.glob(os.path.join(args.src_dir, args.pattern)))
     print(f"Verifying {len(clips)} normalized clips\n")
 
     # Header
@@ -65,6 +74,10 @@ def main():
         results.append((name, stats))
 
     # Print convergence summary
+    if not results:
+        print("\nNo clips found — check directory path")
+        sys.exit(1)
+
     print("\n=== Convergence Summary ===")
     for key in ["YAVG", "SATAVG", "UAVG", "VAVG"]:
         vals = [r[1][key] for r in results]

@@ -1,0 +1,40 @@
+Clips: 16
+
+Composite rankings (pre-fix baseline):
+Clip                                           AvgRank
+-------------------------------------------------------
+ag1980tbc1                                        6.64
+mitsutbc1                                         6.64
+ag1980tbc1_sharpMAX_b2                            7.64
+ag1980tbc1_sharpMIN_b2                            7.64
+jvctb0_pcEdit_r3Off_snellhd                       7.91
+jvctb0_pcEdit_r3Off_leitchtbc1_3dY                8.45
+jvctbc1_pcAuto_r3On_b2                            8.45
+jvctbc1_pcEdit_r3Off_b2                           8.45
+ds555tbc1_dnrOff                                  8.55
+jvctb0_pcEdit_r3Off_dv                            8.55
+ag1980tbc0                                        8.64
+ds555tbc0_dnrOff                                  9.09
+ds555tbc1_dnrOn                                   9.27
+jvctb0_pcEdit_r3Off_leitchtbc0_3dY                9.55
+mitsutbc0                                         9.55
+jvctbc0_pcEdit_r3Off_b2                          11.00
+
+blown_whites values:
+  ag1980tbc0: 0.000000
+  ag1980tbc1: 0.000000
+  ag1980tbc1_sharpMAX_b2: 0.000000
+  ag1980tbc1_sharpMIN_b2: 0.000000
+  ds555tbc0_dnrOff: 0.000000
+  ds555tbc1_dnrOff: 0.000000
+  ds555tbc1_dnrOn: 0.000000
+  jvctb0_pcEdit_r3Off_dv: 0.000000
+  jvctb0_pcEdit_r3Off_leitchtbc0_3dY: 0.000000
+  jvctb0_pcEdit_r3Off_leitchtbc1_3dY: 0.000000
+  jvctb0_pcEdit_r3Off_snellhd: 0.000000
+  jvctbc0_pcEdit_r3Off_b2: 0.000000
+  jvctbc1_pcAuto_r3On_b2: 0.000000
+  jvctbc1_pcEdit_r3Off_b2: 0.000000
+  mitsutbc0: 0.000000
+  mitsutbc1: 0.000000
+Unique values: 1 — ZERO VARIANCE
