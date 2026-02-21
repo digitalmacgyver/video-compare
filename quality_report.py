@@ -66,6 +66,57 @@ def to_float(y):
     return y.astype(np.float64) / 1023.0
 
 
+DETAIL_PERCEPTUAL_KEY = "detail_perceptual"
+DETAIL_PERCEPTUAL_DEPS = ("detail_blur_inv", "detail_sml", "texture_quality")
+DERIVED_KEYS = {DETAIL_PERCEPTUAL_KEY}
+EXTRA_DETAIL_KEYS = ["detail_tenengrad", "detail_sml", "detail_blur_inv", DETAIL_PERCEPTUAL_KEY]
+PCT_KEYS = {"crushed_blacks", "blown_whites"}
+METRIC_GUIDE_TEXT = {
+    "sharpness": "Laplacian variance — blur vs. sharpness",
+    "edge_strength": "Sobel gradient — edge definition",
+    "blocking": "8x8 DCT boundary ratio",
+    "detail": "Local variance — micro-detail",
+    "detail_perceptual": "Perceptual detail tuned for SD analog VHS (not validated for HD digital sources)",
+    "detail_tenengrad": "Robust Tenengrad — edge detail (noise-suppressed)",
+    "detail_sml": "Robust modified Laplacian — fine transition clarity",
+    "detail_blur_inv": "Inverse blur effect — directional blur resistance",
+    "texture_quality": "Structure/noise ratio — detail quality",
+    "ringing": "Edge overshoot / haloing",
+    "temporal_stability": "Frame-to-frame diff — flicker",
+    "colorfulness": "Hasler-S\u00fcstrunk — color vibrancy",
+    "naturalness": "MSCN kurtosis — natural signal statistics",
+    "crushed_blacks": "Shadow headroom — clipped near-black fraction",
+    "blown_whites": "Highlight headroom — clipped near-white fraction",
+}
+
+
+def parse_metric_csv(csv_text):
+    """Parse a comma-separated metric key list."""
+    if not csv_text:
+        return []
+    return [x.strip() for x in csv_text.split(",") if x.strip()]
+
+
+def short_metric_header(key):
+    """Return compact table header text for a metric key."""
+    label = METRIC_INFO[key][0]
+    compact = re.sub(r"[^A-Za-z0-9]+", "", label)
+    return compact[:8] if compact else key[:8]
+
+
+def fmt_metric_value(key, value):
+    """Format one metric value for text/HTML tables."""
+    if key in PCT_KEYS:
+        return f"{value*100:.1f}%"
+    if key == "blocking":
+        return f"{value:.4f}"
+    if key == "colorfulness":
+        return f"{value:.1f}"
+    if key == "naturalness":
+        return f"{value:.3f}"
+    return f"{value:.6f}"
+
+
 # =====================================================================
 # TECHNICAL METRICS
 # =====================================================================
@@ -115,6 +166,81 @@ def detail_texture(yf):
         return 0.0
     cvs = stds[mask] / means[mask]
     return float(np.median(cvs))
+
+
+def detail_tenengrad(yf):
+    """Robust Tenengrad detail metric with residual-noise suppression."""
+    yd = cv2.GaussianBlur(yf, (0, 0), 1.0)
+    gx = cv2.Sobel(yd, cv2.CV_64F, 1, 0, ksize=3)
+    gy = cv2.Sobel(yd, cv2.CV_64F, 0, 1, ksize=3)
+    grad = np.sqrt(gx * gx + gy * gy)
+
+    # Estimate a noise floor from high-frequency residual gradients.
+    residual = yf - yd
+    rx = cv2.Sobel(residual, cv2.CV_64F, 1, 0, ksize=3)
+    ry = cv2.Sobel(residual, cv2.CV_64F, 0, 1, ksize=3)
+    noise_grad = np.sqrt(rx * rx + ry * ry)
+    noise_floor = np.median(noise_grad)
+
+    signal_grad = np.maximum(grad - 1.5 * noise_floor, 0.0)
+    return float(np.mean(signal_grad) / (np.mean(yf) + 1e-10))
+
+
+def detail_sml(yf):
+    """Robust sum-modified-Laplacian detail metric (Nayar focus measure family)."""
+    yd = cv2.GaussianBlur(yf, (0, 0), 1.0)
+    center = yd[1:-1, 1:-1]
+    if center.size == 0:
+        return 0.0
+
+    ml_x = np.abs(2.0 * center - yd[1:-1, :-2] - yd[1:-1, 2:])
+    ml_y = np.abs(2.0 * center - yd[:-2, 1:-1] - yd[2:, 1:-1])
+    ml = ml_x + ml_y
+
+    # Residual ML estimates high-frequency noise floor.
+    residual = yf - yd
+    rc = residual[1:-1, 1:-1]
+    ml_nx = np.abs(2.0 * rc - residual[1:-1, :-2] - residual[1:-1, 2:])
+    ml_ny = np.abs(2.0 * rc - residual[:-2, 1:-1] - residual[2:, 1:-1])
+    noise_floor = np.median(ml_nx + ml_ny)
+
+    signal_ml = np.maximum(ml - 2.0 * noise_floor, 0.0)
+    return float(np.mean(signal_ml) / (np.mean(yf) + 1e-10))
+
+
+def detail_blur_inv(yf, h_size=11):
+    """Inverse blur-effect detail metric (Crete et al.) with flat-region noise penalty."""
+    if h_size < 3:
+        h_size = 3
+    if h_size % 2 == 0:
+        h_size += 1
+
+    y_smooth = cv2.GaussianBlur(yf, (0, 0), 0.9)
+    y_blur = cv2.blur(y_smooth, (h_size, h_size))
+    eps = 1e-12
+    crop = (slice(2, -1), slice(2, -1))
+
+    axis_blur = []
+    for dx, dy in ((1, 0), (0, 1)):
+        grad_sharp = np.abs(cv2.Sobel(y_smooth, cv2.CV_64F, dx, dy, ksize=3))
+        grad_blur = np.abs(cv2.Sobel(y_blur, cv2.CV_64F, dx, dy, ksize=3))
+        t = np.maximum(0.0, grad_sharp - grad_blur)
+        m1 = np.sum(np.maximum(grad_sharp[crop], eps))
+        m2 = np.sum(t[crop])
+        axis_blur.append(np.abs(m1 - m2) / (m1 + eps))
+
+    detail_score = 1.0 - max(axis_blur)
+
+    # Penalize residual noise measured on flatter regions.
+    gx = cv2.Sobel(y_smooth, cv2.CV_64F, 1, 0, ksize=3)
+    gy = cv2.Sobel(y_smooth, cv2.CV_64F, 0, 1, ksize=3)
+    grad_mag = np.sqrt(gx * gx + gy * gy)
+    flat = grad_mag < np.percentile(grad_mag, 35)
+    residual = np.abs(yf - y_smooth)
+    noise = np.median(residual[flat]) if flat.any() else np.median(residual)
+    noise_penalty = 1.2 * noise / (np.mean(yf) + eps)
+
+    return float(max(0.0, detail_score - noise_penalty))
 
 
 def texture_quality_measure(yf):
@@ -213,6 +339,66 @@ def naturalness_nss(yf):
     return float(np.mean(((data - np.mean(data)) / s) ** 4) - 3.0)
 
 
+def _zscore_with_params(arr, mu, sigma):
+    """Return z-scores with guard for near-zero sigma."""
+    if sigma < 1e-15:
+        return np.zeros_like(arr, dtype=np.float64)
+    return (arr - mu) / sigma
+
+
+def add_detail_perceptual_metric(all_results, all_perframe):
+    """Add derived VHS perceptual detail metric to clip summary and per-frame data.
+
+    detail_perceptual = z(detail_blur_inv) - z(detail_sml) - z(texture_quality)
+
+    Z-normalization is computed across clip means so the three components have
+    comparable scale on a given run.
+    """
+    clip_names = sorted(all_results.keys())
+    if not clip_names:
+        return False
+
+    for dep in DETAIL_PERCEPTUAL_DEPS:
+        missing = [c for c in clip_names if dep not in all_results[c]]
+        if missing:
+            print(f"WARNING: cannot compute {DETAIL_PERCEPTUAL_KEY}; missing '{dep}' in {len(missing)} clip(s)")
+            return False
+
+    mean_blur = np.array([all_results[c]["detail_blur_inv"]["mean"] for c in clip_names], dtype=np.float64)
+    mean_sml = np.array([all_results[c]["detail_sml"]["mean"] for c in clip_names], dtype=np.float64)
+    mean_tex = np.array([all_results[c]["texture_quality"]["mean"] for c in clip_names], dtype=np.float64)
+
+    mu_b, sd_b = float(np.mean(mean_blur)), float(np.std(mean_blur))
+    mu_s, sd_s = float(np.mean(mean_sml)), float(np.std(mean_sml))
+    mu_t, sd_t = float(np.mean(mean_tex)), float(np.std(mean_tex))
+
+    z_blur = _zscore_with_params(mean_blur, mu_b, sd_b)
+    z_sml = _zscore_with_params(mean_sml, mu_s, sd_s)
+    z_tex = _zscore_with_params(mean_tex, mu_t, sd_t)
+    mean_scores = z_blur - z_sml - z_tex
+
+    for i, name in enumerate(clip_names):
+        arr_blur = np.asarray(all_perframe[name]["detail_blur_inv"], dtype=np.float64)
+        arr_sml = np.asarray(all_perframe[name]["detail_sml"], dtype=np.float64)
+        arr_tex = np.asarray(all_perframe[name]["texture_quality"], dtype=np.float64)
+        n = int(min(len(arr_blur), len(arr_sml), len(arr_tex)))
+        if n <= 0:
+            frame_scores = np.array([float(mean_scores[i])], dtype=np.float64)
+        else:
+            frame_scores = (
+                _zscore_with_params(arr_blur[:n], mu_b, sd_b)
+                - _zscore_with_params(arr_sml[:n], mu_s, sd_s)
+                - _zscore_with_params(arr_tex[:n], mu_t, sd_t)
+            )
+
+        all_perframe[name][DETAIL_PERCEPTUAL_KEY] = frame_scores
+        all_results[name][DETAIL_PERCEPTUAL_KEY] = {
+            "mean": float(np.mean(frame_scores)),
+            "std": float(np.std(frame_scores)),
+        }
+    return True
+
+
 
 # =====================================================================
 # CLIP NAMING
@@ -244,15 +430,15 @@ def short_name(filepath):
 # CLIP ANALYSIS
 # =====================================================================
 
-def analyze_clip(filepath, width, height, skip_frames=0):
+def analyze_clip(filepath, width, height, metric_keys, skip_frames=0):
     """Analyze one clip, return (summary_dict, perframe_dict).
 
     summary_dict has the same format as before: {metric: {mean, std}, n_frames}.
-    perframe_dict maps ALL metric keys -> numpy array of per-frame values.
+    perframe_dict maps selected metric keys -> numpy array of per-frame values.
     skip_frames: number of initial frames to discard (for timing alignment).
     """
     proc = subprocess.Popen(decode_command(filepath), stdout=subprocess.PIPE)
-    accum = {k: [] for k in ALL_KEYS if k != "temporal_stability"}
+    accum = {k: [] for k in metric_keys if k != "temporal_stability" and k not in DERIVED_KEYS}
     temporal_diffs = []
     prev_yf = None
     n_frames = 0
@@ -271,21 +457,38 @@ def analyze_clip(filepath, width, height, skip_frames=0):
             y, u, v = frame
             yf = to_float(y)
 
-            accum["sharpness"].append(sharpness_laplacian(yf))
-            accum["edge_strength"].append(edge_strength_sobel(yf))
-            accum["blocking"].append(blocking_artifact_measure(yf))
-            accum["detail"].append(detail_texture(yf))
-            accum["texture_quality"].append(texture_quality_measure(yf))
-            accum["ringing"].append(ringing_measure(yf))
-            accum["colorfulness"].append(colorfulness_metric(u, v))
-            accum["naturalness"].append(naturalness_nss(yf))
-            accum["crushed_blacks"].append(crushed_blacks(yf))
-            accum["blown_whites"].append(blown_whites(yf))
+            if "sharpness" in accum:
+                accum["sharpness"].append(sharpness_laplacian(yf))
+            if "edge_strength" in accum:
+                accum["edge_strength"].append(edge_strength_sobel(yf))
+            if "blocking" in accum:
+                accum["blocking"].append(blocking_artifact_measure(yf))
+            if "detail" in accum:
+                accum["detail"].append(detail_texture(yf))
+            if "detail_tenengrad" in accum:
+                accum["detail_tenengrad"].append(detail_tenengrad(yf))
+            if "detail_sml" in accum:
+                accum["detail_sml"].append(detail_sml(yf))
+            if "detail_blur_inv" in accum:
+                accum["detail_blur_inv"].append(detail_blur_inv(yf))
+            if "texture_quality" in accum:
+                accum["texture_quality"].append(texture_quality_measure(yf))
+            if "ringing" in accum:
+                accum["ringing"].append(ringing_measure(yf))
+            if "colorfulness" in accum:
+                accum["colorfulness"].append(colorfulness_metric(u, v))
+            if "naturalness" in accum:
+                accum["naturalness"].append(naturalness_nss(yf))
+            if "crushed_blacks" in accum:
+                accum["crushed_blacks"].append(crushed_blacks(yf))
+            if "blown_whites" in accum:
+                accum["blown_whites"].append(blown_whites(yf))
 
-            if prev_yf is not None:
+            if "temporal_stability" in metric_keys and prev_yf is not None:
                 mean_y = 0.5 * (np.mean(yf) + np.mean(prev_yf))
                 temporal_diffs.append(np.mean(np.abs(yf - prev_yf)) / (mean_y + 1e-10))
-            prev_yf = yf
+            if "temporal_stability" in metric_keys:
+                prev_yf = yf
             n_frames += 1
     finally:
         proc.stdout.close()
@@ -309,26 +512,30 @@ def analyze_clip(filepath, width, height, skip_frames=0):
         avg = float(np.median(arr)) if k == "naturalness" else float(np.mean(arr))
         result[k] = {"mean": avg, "std": float(np.std(arr))}
 
-    if temporal_diffs:
-        td = np.array(temporal_diffs)
-        result["temporal_stability"] = {"mean": float(np.mean(td)), "std": float(np.std(td))}
-    else:
-        result["temporal_stability"] = {"mean": 0.0, "std": 0.0}
+    if "temporal_stability" in metric_keys:
+        if temporal_diffs:
+            td = np.array(temporal_diffs)
+            result["temporal_stability"] = {"mean": float(np.mean(td)), "std": float(np.std(td))}
+        else:
+            result["temporal_stability"] = {"mean": 0.0, "std": 0.0}
 
     # Suppress floating-point noise on ratio metrics (tiny means from mostly-zero per-frame values)
     EPS = 1e-5
-    for k in ("crushed_blacks", "blown_whites"):
+    for k in PCT_KEYS:
+        if k not in result:
+            continue
         if result[k]["mean"] < EPS:
             result[k]["mean"] = 0.0
 
     result["n_frames"] = n_frames
 
-    # Per-frame arrays for all metrics (used for comparison screenshots)
+    # Per-frame arrays for selected metrics (used for comparison screenshots)
     perframe = {k: np.array(accum[k]) for k in accum}
-    if temporal_diffs:
-        perframe["temporal_stability"] = np.array(temporal_diffs)
-    else:
-        perframe["temporal_stability"] = np.array([0.0])
+    if "temporal_stability" in metric_keys:
+        if temporal_diffs:
+            perframe["temporal_stability"] = np.array(temporal_diffs)
+        else:
+            perframe["temporal_stability"] = np.array([0.0])
 
     return result, perframe
 
@@ -345,7 +552,7 @@ def extract_frame_jpeg(filepath, frame_num):
     return proc.stdout if proc.returncode == 0 else b""
 
 
-def find_comparison_frames(clip_paths, clip_names, all_perframe, all_results, skip_offsets):
+def find_comparison_frames(clip_paths, clip_names, all_perframe, all_results, skip_offsets, metric_keys):
     """Find a representative frame for each metric and extract screenshots.
 
     For each metric M:
@@ -355,12 +562,13 @@ def find_comparison_frames(clip_paths, clip_names, all_perframe, all_results, sk
       c) Extract that frame from ALL clips for side-by-side comparison.
 
     skip_offsets: dict {clip_name: int} — frames skipped at start (added to ffmpeg frame number).
+    metric_keys: ordered list of metrics to include in comparison galleries.
 
     Returns dict: {metric_key: {"frame_num": int, "best_clip": str,
                                  "frames": {clip_name: {"jpeg_b64": str, "value": float}}}}
     """
     comparisons = {}
-    for key in ALL_KEYS:
+    for key in metric_keys:
         _, _, higher_better = METRIC_INFO[key]
 
         # (a) Find the clip with the best overall score for this metric
@@ -451,60 +659,47 @@ def extract_sample_screenshots(clip_paths, clip_names, n_screenshots, skip_offse
 # TEXT REPORT
 # =====================================================================
 
-def format_text_report(all_results, src_dir):
+def format_text_report(all_results, src_dir, metric_keys):
     """Format results into a readable text report with auto-sized columns."""
     clip_names = sorted(all_results.keys())
     col_w = max(len(n) for n in clip_names) + 2
 
     lines = []
     lines.append("=" * 120)
-    lines.append(f"NO-REFERENCE VIDEO QUALITY METRICS REPORT")
+    lines.append("NO-REFERENCE VIDEO QUALITY METRICS REPORT")
     lines.append("=" * 120)
     lines.append(f"Source: {src_dir}")
     lines.append("All metrics are brightness-agnostic (no upstream normalization required).")
     lines.append("")
+    lines.append(f"--- Quality Metrics ({len(metric_keys)}) ---")
 
-    for label, keys, headers in [
-        ("Quality Metrics", ALL_KEYS,
-         ["Sharpness", "Edge Str", "Blocking", "Detail", "TexQual", "Ringing", "Temporal", "Colorful", "Natural", "CrBlack", "BlnWhite"]),
-    ]:
-        lines.append(f"--- {label} ---")
-        header = f"{'Clip':<{col_w}}" + "".join(f" {h:>10}" for h in headers)
-        lines.append(header)
-        lines.append("-" * len(header))
-        for name in clip_names:
-            row = f"{name:<{col_w}}"
-            for k in keys:
-                v = all_results[name][k]["mean"]
-                if k in ("crushed_blacks", "blown_whites"):
-                    row += f" {v*100:>9.1f}%"
-                elif k == "blocking":
-                    row += f" {v:>10.4f}"
-                elif k == "colorfulness":
-                    row += f" {v:>10.2f}"
-                elif k == "naturalness":
-                    row += f" {v:>10.4f}"
-                else:
-                    row += f" {v:>10.6f}"
-            lines.append(row)
-        lines.append("")
+    headers = [short_metric_header(k) for k in metric_keys]
+    header = f"{'Clip':<{col_w}}" + "".join(f" {h:>10}" for h in headers)
+    lines.append(header)
+    lines.append("-" * len(header))
+    for name in clip_names:
+        row = f"{name:<{col_w}}"
+        for k in metric_keys:
+            v = all_results[name][k]["mean"]
+            row += f" {fmt_metric_value(k, v):>10}"
+        lines.append(row)
+    lines.append("")
 
     # Rankings
     lines.append("=" * 120)
     lines.append("RANKINGS (best to worst per metric)")
     lines.append("=" * 120)
 
-    for key in ALL_KEYS:
-        label, unit, higher_better = METRIC_INFO[key]
+    for key in metric_keys:
+        label, _, higher_better = METRIC_INFO[key]
         if higher_better is True:
             dir_str = "(higher = better)"
         elif higher_better is False:
             dir_str = "(lower = better)"
         else:
             dir_str = "(closer to 1.0 = better)"
-        label = f"{label} {dir_str}"
-        higher_better = higher_better  # used below
-        lines.append(f"\n  {label}:")
+        lines.append(f"\n  {label} {dir_str}:")
+
         items = [(n, all_results[n][key]["mean"]) for n in clip_names]
         if higher_better is None:
             items.sort(key=lambda x: abs(x[1] - 1.0))
@@ -512,15 +707,12 @@ def format_text_report(all_results, src_dir):
             items.sort(key=lambda x: -x[1])
         else:
             items.sort(key=lambda x: x[1])
+
         for rank, (name, val) in enumerate(items, 1):
-            if key in ("crushed_blacks", "blown_whites"):
-                lines.append(f"    {rank:>2}. {name:<{col_w}} {val*100:.1f}%")
-            else:
-                fmt = ".4f" if key == "blocking" else ".2f" if key == "colorfulness" else ".4f" if key == "naturalness" else ".6f"
-                lines.append(f"    {rank:>2}. {name:<{col_w}} {val:{fmt}}")
+            lines.append(f"    {rank:>2}. {name:<{col_w}} {fmt_metric_value(key, val)}")
 
     # Composite rankings
-    composites = compute_composites(all_results)
+    composites = compute_composites(all_results, metric_keys=metric_keys)
 
     lines.append("")
     lines.append("=" * 120)
@@ -655,21 +847,23 @@ HTML_CSS = """
 """
 
 
-def generate_html(data, title="Video Quality Report", comparisons=None, samples=None, json_filename=None):
+def generate_html(data, metric_keys, title="Video Quality Report", comparisons=None,
+                  samples=None, json_filename=None):
     """Generate a self-contained HTML quality report with Chart.js visualizations."""
     clip_names = sorted(data.keys())
     n = len(clip_names)
+    m = len(metric_keys)
     palette = COLORS_7 if n <= 7 else COLORS_14
     colors = {c: palette[i % len(palette)] for i, c in enumerate(clip_names)}
 
-    composites = compute_composites(data)
+    composites = compute_composites(data, metric_keys=metric_keys)
     ranked_overall = sorted(clip_names, key=lambda c: composites[c]["overall"])
 
     # Radar: normalize each metric to 0-100
     radar_scores = {}
     for c in clip_names:
         sc = []
-        for key in ALL_KEYS:
+        for key in metric_keys:
             vals = [data[d][key]["mean"] for d in clip_names]
             mn, mx = min(vals), max(vals)
             rng = mx - mn if mx - mn > 1e-15 else 1e-15
@@ -683,17 +877,20 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
                 max_dist = max(abs(v - 1.0) for v in vals) or 1e-15
                 sc.append((1 - abs(raw - 1.0) / max_dist) * 100)
         radar_scores[c] = sc
-    radar_labels = [METRIC_INFO[k][0] for k in ALL_KEYS]
+    radar_labels = [METRIC_INFO[k][0] for k in metric_keys]
 
     # Heatmap data
     hm_data = []
     for c in ranked_overall:
-        cells = [{"raw": data[c][k]["mean"], "z": composites[c]["zscores"][k], "key": k} for k in ALL_KEYS]
+        cells = [{"raw": data[c][k]["mean"],
+                  "raw_fmt": fmt_metric_value(k, data[c][k]["mean"]),
+                  "z": composites[c]["zscores"][k], "key": k}
+                 for k in metric_keys]
         hm_data.append({"name": c, "overall": composites[c]["overall"], "cells": cells})
 
     # Per-metric rankings
     per_metric = {}
-    for key in ALL_KEYS:
+    for key in metric_keys:
         _, _, hb = METRIC_INFO[key]
         items = [(c, data[c][key]["mean"]) for c in clip_names]
         if hb is None:
@@ -702,7 +899,7 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
             items.sort(key=lambda x: -x[1])
         else:
             items.sort(key=lambda x: x[1])
-        is_pct = key in ("crushed_blacks", "blown_whites")
+        is_pct = key in PCT_KEYS
         per_metric[key] = {
             "labels": [c for c, _ in items],
             "values": [v * 100 for _, v in items] if is_pct else [v for _, v in items],
@@ -718,6 +915,21 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
 
     # Chart height scales with clip count
     bar_height = max(320, n * 36 + 80)
+    metric_guide_html = []
+    for key in metric_keys:
+        label, _, hb = METRIC_INFO[key]
+        if hb is True:
+            dir_class, dir_text = "dir-up", "higher"
+        elif hb is False:
+            dir_class, dir_text = "dir-down", "lower"
+        else:
+            dir_class, dir_text = "dir-mid", "~1.0"
+        desc = METRIC_GUIDE_TEXT.get(key, "")
+        metric_guide_html.append(
+            f'<div><span class="mg-label">{label}</span> <span class="dir {dir_class}">{dir_text}</span>'
+            f"<br>{desc}</div>"
+        )
+    heatmap_headers = "".join(f"<th>{short_metric_header(k)}</th>" for k in metric_keys)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -732,34 +944,24 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
 
 <h1>{title}</h1>
 <p class="subtitle">
-  {n} analog video captures evaluated on 11 no-reference quality metrics
+  {n} analog video captures evaluated on {m} no-reference quality metrics
   (all brightness-agnostic — no upstream normalization required).
 </p>
 
 <div class="card">
   <h3>Metric Guide</h3>
   <div class="metric-guide">
-    <div><span class="mg-label">Sharpness</span> <span class="dir dir-up">higher</span><br>Laplacian variance — blur vs. sharpness</div>
-    <div><span class="mg-label">Edge Strength</span> <span class="dir dir-up">higher</span><br>Sobel gradient — edge definition</div>
-    <div><span class="mg-label">Blocking</span> <span class="dir dir-mid">~1.0</span><br>8x8 DCT boundary ratio</div>
-    <div><span class="mg-label">Detail</span> <span class="dir dir-up">higher</span><br>Local variance — micro-detail</div>
-    <div><span class="mg-label">Texture Q</span> <span class="dir dir-up">higher</span><br>Structure/noise ratio — detail quality</div>
-    <div><span class="mg-label">Ringing</span> <span class="dir dir-down">lower</span><br>Edge overshoot / haloing — retained despite high sharpness correlation; reflects a distinct analog artifact (VCR sharpness circuits, aperture correction) that varies independently across hardware</div>
-    <div><span class="mg-label">Temporal</span> <span class="dir dir-down">lower</span><br>Frame-to-frame diff — flicker</div>
-    <div><span class="mg-label">Colorfulness</span> <span class="dir dir-up">higher</span><br>Hasler-S&uuml;sstrunk — color vibrancy</div>
-    <div><span class="mg-label">Naturalness</span> <span class="dir dir-up">higher</span><br>MSCN kurtosis — natural signal statistics</div>
-    <div><span class="mg-label">Crushed Blacks</span> <span class="dir dir-down">lower %</span><br>Shadow headroom — fraction of shadow pixels clipped to near-black</div>
-    <div><span class="mg-label">Blown Whites</span> <span class="dir dir-down">lower %</span><br>Highlight headroom — fraction of highlight pixels clipped to near-white</div>
+    {"".join(metric_guide_html)}
   </div>
 </div>
 
 <h2>Overall Composite Ranking</h2>
 <div class="card">
   <div class="chart-container" style="height:{bar_height}px;"><canvas id="overallChart"></canvas></div>
-  <p class="legend-note">Average rank across all 11 metrics (1 = best per metric). Lower average rank = better overall quality.</p>
+  <p class="legend-note">Average rank across all {m} metrics (1 = best per metric). Lower average rank = better overall quality.</p>
 </div>
 
-<h2>11-Metric Radar Comparison</h2>
+<h2>{m}-Metric Radar Comparison</h2>
 <div class="card">
   <div class="chart-container chart-radar"><canvas id="radarChart"></canvas></div>
   <p class="legend-note">All metrics on 0–100 quality scale (higher = better on all axes). Click legend to toggle.{" Top 5 shown by default." if n > 5 else ""}</p>
@@ -770,11 +972,11 @@ def generate_html(data, title="Video Quality Report", comparisons=None, samples=
   <table class="heatmap" id="heatmapTable">
     <thead><tr>
       <th>Clip</th><th>Avg Rank</th>
-      <th>Sharp</th><th>Edge</th><th>Block</th><th>Detail</th><th>TexQ</th><th>Ring</th><th>Temp</th><th>Color</th><th>Natur</th><th>CrBlk</th><th>BlnWh</th>
+      {heatmap_headers}
     </tr></thead>
     <tbody></tbody>
   </table>
-  <p class="legend-note">Ranked by average rank across all 11 metrics (lower = better). Cell color: green = good, red = poor. Raw metric values shown; CrBlk/BlnWh as percentages. Click any column header to sort.</p>
+  <p class="legend-note">Ranked by average rank across all {m} metrics (lower = better). Cell color: green = good, red = poor. Click any column header to sort.</p>
 </div>
 
 <h2>Individual Metric Rankings</h2>
@@ -817,7 +1019,7 @@ hmData.forEach((row,idx)=>{{
   td.style.fontWeight='600';tr.appendChild(td);
   row.cells.forEach(cell=>{{
     td=document.createElement('td');
-    td.textContent=['crushed_blacks','blown_whites'].includes(cell.key)?(cell.raw*100).toFixed(1)+'%':['blocking'].includes(cell.key)?cell.raw.toFixed(4):['colorfulness'].includes(cell.key)?cell.raw.toFixed(1):['naturalness'].includes(cell.key)?cell.raw.toFixed(3):cell.raw.toFixed(5);
+    td.textContent=cell.raw_fmt;
     const z=cell.z,n=Math.max(-1,Math.min(1,z/2.5));
     td.style.background=n>0?'rgba(63,185,80,'+(Math.abs(n)*0.35)+')':'rgba(248,81,73,'+(Math.abs(n)*0.35)+')';
     tr.appendChild(td);
@@ -876,7 +1078,7 @@ document.querySelectorAll('.heatmap th').forEach((th,colIdx)=>{{
 is shown. All clips are shown at the same frame number for direct comparison.
 Click any image to enlarge; use the <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:rgba(0,0,0,0.55);border-radius:4px;vertical-align:middle;color:#ccc;">""" + CMP_ICON_SVG.replace('width="20" height="20"', 'width="16" height="16"') + """</span> icon to A/B compare two images with a slider.</p>
 """
-        for key in ALL_KEYS:
+        for key in metric_keys:
             if key not in comparisons:
                 continue
             comp = comparisons[key]
@@ -1308,6 +1510,11 @@ def main():
     parser.add_argument("--skip", action="append", default=[],
                         help="Skip N initial frames for a clip: PATTERN:N (e.g. --skip jvctbc1:1). "
                              "PATTERN is matched as substring of clip filename. Can be repeated.")
+    parser.add_argument("--extra-detail-metrics", default="",
+                        help=("Comma-separated extra detail metrics to compute "
+                              f"({', '.join(EXTRA_DETAIL_KEYS)})."))
+    parser.add_argument("--report-metrics", default="",
+                        help="Comma-separated metric keys to include in HTML/TXT report (default: all computed).")
     args = parser.parse_args()
 
     # Parse --skip arguments into {pattern: n_frames} dict
@@ -1322,6 +1529,42 @@ def main():
         except ValueError:
             print(f"ERROR: --skip N must be integer, got '{n}'")
             sys.exit(1)
+
+    extra_detail_metrics = parse_metric_csv(args.extra_detail_metrics)
+    unknown_extra = [k for k in extra_detail_metrics if k not in EXTRA_DETAIL_KEYS]
+    if unknown_extra:
+        print(f"ERROR: Unknown --extra-detail-metrics: {', '.join(unknown_extra)}")
+        print(f"       Allowed: {', '.join(EXTRA_DETAIL_KEYS)}")
+        sys.exit(1)
+
+    requested_metric_keys = list(ALL_KEYS)
+    for key in extra_detail_metrics:
+        if key not in requested_metric_keys:
+            requested_metric_keys.append(key)
+
+    analysis_metric_keys = list(requested_metric_keys)
+    if DETAIL_PERCEPTUAL_KEY in requested_metric_keys:
+        # Ensure dependencies are computed even if only the derived key was requested.
+        for dep in DETAIL_PERCEPTUAL_DEPS:
+            if dep not in analysis_metric_keys:
+                analysis_metric_keys.append(dep)
+
+    if args.report_metrics:
+        report_metric_keys = parse_metric_csv(args.report_metrics)
+        if not report_metric_keys:
+            print("ERROR: --report-metrics is empty after parsing")
+            sys.exit(1)
+        unknown_report = [k for k in report_metric_keys if k not in METRIC_INFO]
+        if unknown_report:
+            print(f"ERROR: Unknown --report-metrics keys: {', '.join(unknown_report)}")
+            sys.exit(1)
+        missing_report = [k for k in report_metric_keys if k not in analysis_metric_keys]
+        if missing_report:
+            print(f"ERROR: --report-metrics keys not computed in this run: {', '.join(missing_report)}")
+            print("       Add them via --extra-detail-metrics (or remove from --report-metrics).")
+            sys.exit(1)
+    else:
+        report_metric_keys = list(requested_metric_keys)
 
     src_dir = args.src_dir.rstrip("/")
     output_dir = args.output_dir or src_dir
@@ -1344,7 +1587,11 @@ def main():
         sys.exit(1)
     vid_w, vid_h = res_set.pop()
 
-    print(f"Analyzing {len(clips)} clips in {src_dir} ({vid_w}x{vid_h})...\n")
+    print(f"Analyzing {len(clips)} clips in {src_dir} ({vid_w}x{vid_h})...")
+    print(f"Computed metrics ({len(analysis_metric_keys)}): {', '.join(analysis_metric_keys)}")
+    if report_metric_keys != analysis_metric_keys:
+        print(f"Report metrics ({len(report_metric_keys)}): {', '.join(report_metric_keys)}")
+    print("")
 
     all_results = {}
     all_perframe = {}
@@ -1374,7 +1621,7 @@ def main():
 
         skip_msg = f", skip {skip}" if skip > 0 else ""
         print(f"[{i:>2}/{len(clips)}] {name}{skip_msg}...", end=" ", flush=True)
-        metrics, perframe = analyze_clip(clip_path, vid_w, vid_h, skip_frames=skip)
+        metrics, perframe = analyze_clip(clip_path, vid_w, vid_h, analysis_metric_keys, skip_frames=skip)
 
         if metrics is None:
             print(f"skipped (no frames decoded)")
@@ -1385,14 +1632,21 @@ def main():
         all_perframe[name] = perframe
         print(f"done ({metrics['n_frames']} frames)")
 
+    if DETAIL_PERCEPTUAL_KEY in analysis_metric_keys:
+        print("\nComputing derived metric: detail_perceptual")
+        if not add_detail_perceptual_metric(all_results, all_perframe):
+            print("ERROR: failed to compute derived detail_perceptual metric")
+            sys.exit(1)
+
     # JSON output (always) — timestamped filename for provenance
     run_timestamp = datetime.now()
     ts_suffix = run_timestamp.strftime("%Y%m%d_%H%M%S")
     json_output = {
         "_metadata": {
-            "schema_version": 2,
-            "metrics": list(ALL_KEYS),
-            "n_metrics": len(ALL_KEYS),
+            "schema_version": 3,
+            "metrics": list(analysis_metric_keys),
+            "n_metrics": len(analysis_metric_keys),
+            "report_metrics": list(report_metric_keys),
             "source_dir": os.path.abspath(src_dir),
             "pattern": args.pattern,
             "skip_frames": dict(skip_patterns),
@@ -1413,7 +1667,7 @@ def main():
 
     print("\nExtracting metric comparison frames...")
     comparisons = find_comparison_frames(clip_paths, clip_names, all_perframe,
-                                         all_results, skip_offsets)
+                                         all_results, skip_offsets, report_metric_keys)
 
     if args.screenshots > 0:
         print(f"\nExtracting {args.screenshots} sample screenshots per clip...")
@@ -1425,14 +1679,15 @@ def main():
     title = f"Video Quality Report — {display_name}"
     html_path = os.path.join(output_dir, f"{args.name}.html")
     with open(html_path, "w") as f:
-        f.write(generate_html(all_results, title, comparisons, samples, json_filename=json_name))
+        f.write(generate_html(all_results, report_metric_keys, title, comparisons, samples,
+                              json_filename=json_name))
     print(f"HTML:  {html_path}")
 
     # Text output (optional)
     if args.text:
         txt_path = os.path.join(output_dir, f"{args.name}.txt")
         with open(txt_path, "w") as f:
-            f.write(format_text_report(all_results, src_dir))
+            f.write(format_text_report(all_results, src_dir, report_metric_keys))
         print(f"Text:  {txt_path}")
 
 

@@ -24,6 +24,10 @@ METRIC_INFO = {
     "edge_strength":      ("Edge Strength",  "Sobel norm.",          True),
     "blocking":           ("Blocking",       "8x8 grid ratio",      None),
     "detail":             ("Detail",         "local CV median",      True),
+    "detail_perceptual":  ("Detail VHS-SD",  "z(blur)-z(sml)-z(tex)", True),
+    "detail_tenengrad":   ("Detail Teneng",  "robust Sobel",         True),
+    "detail_sml":         ("Detail SML",     "robust mod Lap.",      True),
+    "detail_blur_inv":    ("Detail BlurInv", "1 - blur effect",      True),
     "texture_quality":    ("Texture Q",      "structure ratio",      True),
     "ringing":            ("Ringing",        "edge overshoot norm.", False),
     "temporal_stability": ("Temporal",       "frame diff norm.",     False),
@@ -44,7 +48,7 @@ COLORS_14 = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4", "
 NON_DISC_CV_THRESHOLD = 0.01  # Metrics with CV below 1% are excluded from composite
 
 
-def compute_composites(data):
+def compute_composites(data, metric_keys=None):
     """Compute rank-based overall composite scores.
 
     For each metric, clips are ranked 1 (best) to N (worst) using tie-aware
@@ -56,11 +60,16 @@ def compute_composites(data):
     """
     clip_names = sorted(k for k in data.keys() if not k.startswith("_"))
     n = len(clip_names)
+    key_order = list(metric_keys) if metric_keys is not None else list(ALL_KEYS)
     # Only use metrics present in all clips (backward compat with older JSONs)
-    available = set(ALL_KEYS)
+    available = set(key_order)
     for c in clip_names:
         available &= set(data[c].keys())
-    keys = [k for k in ALL_KEYS if k in available]
+    keys = [k for k in key_order if k in available]
+
+    if not keys:
+        return {c: {"overall": 0.0, "ranks": {}, "zscores": {}, "non_discriminating": []}
+                for c in clip_names}
 
     # Identify non-discriminating metrics (CV below threshold)
     non_discriminating = []

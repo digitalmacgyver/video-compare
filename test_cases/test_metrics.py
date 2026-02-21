@@ -20,12 +20,17 @@ from quality_report import (
     edge_strength_sobel,
     blocking_artifact_measure,
     detail_texture,
+    detail_tenengrad,
+    detail_sml,
+    detail_blur_inv,
     texture_quality_measure,
     ringing_measure,
     colorfulness_metric,
     naturalness_nss,
     crushed_blacks,
     blown_whites,
+    add_detail_perceptual_metric,
+    DETAIL_PERCEPTUAL_KEY,
     compute_composites,
     short_name,
     ALL_KEYS,
@@ -205,7 +210,7 @@ def gen_natural_scene():
 def run_tests():
     results = []
 
-    # --- Test 1: Sharp vs. Blur → sharpness, edge_strength, detail ---
+    # --- Test 1: Sharp vs. Blur → sharpness/detail families ---
     sharp = gen_sharp_scene()
     blurred = cv2.GaussianBlur(sharp, (0, 0), 4.0)
     save_png("edges_sharp.png", sharp)
@@ -213,7 +218,10 @@ def run_tests():
 
     for metric_name, func in [("sharpness", sharpness_laplacian),
                                ("edge_strength", edge_strength_sobel),
-                               ("detail", detail_texture)]:
+                               ("detail", detail_texture),
+                               ("detail_tenengrad", detail_tenengrad),
+                               ("detail_sml", detail_sml),
+                               ("detail_blur_inv", detail_blur_inv)]:
         v_good = func(sharp)
         v_bad = func(blurred)
         passed = v_good > v_bad
@@ -255,6 +263,15 @@ def run_tests():
     v_bad = texture_quality_measure(tex_noisy)
     passed = v_good > v_bad
     results.append(("Texture Quality", "texture_quality", v_good, v_bad, "higher", passed))
+
+    # --- Test 4b: New detail metrics should prefer clean over noisy texture ---
+    for metric_name, func in [("detail_tenengrad", detail_tenengrad),
+                               ("detail_sml", detail_sml),
+                               ("detail_blur_inv", detail_blur_inv)]:
+        v_good = func(tex_clean)
+        v_bad = func(tex_noisy)
+        passed = v_good > v_bad
+        results.append(("Detail vs. Noise", metric_name, v_good, v_bad, "higher", passed))
 
     # --- Test 5: Colorfulness ---
     color_bars = gen_color_bars()
@@ -361,11 +378,14 @@ def run_tests():
     # --- Test 10: Brightness Invariance ---
     # Verify brightness-agnostic metrics give the same result at different
     # brightness levels.  The sharp scene at 1.0x vs 0.3x should produce
-    # nearly identical values for detail, sharpness, and edge_strength.
+    # nearly identical values for detail-family metrics.
     dim = np.clip(sharp * 0.3, 0, 1)
     for metric_name, func in [("detail", detail_texture),
                                ("sharpness", sharpness_laplacian),
-                               ("edge_strength", edge_strength_sobel)]:
+                               ("edge_strength", edge_strength_sobel),
+                               ("detail_tenengrad", detail_tenengrad),
+                               ("detail_sml", detail_sml),
+                               ("detail_blur_inv", detail_blur_inv)]:
         v_normal = func(sharp)
         v_dim = func(dim)
         # Allow 5% relative tolerance
@@ -386,6 +406,9 @@ LUMA_METRICS = [
     ("edge_strength",   edge_strength_sobel),
     ("blocking",        blocking_artifact_measure),
     ("detail",          detail_texture),
+    ("detail_tenengrad", detail_tenengrad),
+    ("detail_sml",      detail_sml),
+    ("detail_blur_inv", detail_blur_inv),
     ("texture_quality", texture_quality_measure),
     ("ringing",         ringing_measure),
     ("naturalness",     naturalness_nss),
@@ -494,6 +517,76 @@ def run_short_name_tests():
         results.append(("short_name", f"'{input_path[:25]}'", 0.0, 0.0, expected, passed))
         if not passed:
             print(f"  short_name('{input_path}') = '{actual}', expected '{expected}'")
+
+    return results
+
+
+def run_detail_perceptual_tests():
+    """Test derived perceptual detail metric construction and ordering."""
+    results = []
+
+    all_results = {
+        "clip_a": {
+            "detail_blur_inv": {"mean": 0.58, "std": 0.01},
+            "detail_sml": {"mean": 0.0035, "std": 0.0004},
+            "texture_quality": {"mean": 0.71, "std": 0.02},
+        },
+        "clip_b": {
+            "detail_blur_inv": {"mean": 0.49, "std": 0.01},
+            "detail_sml": {"mean": 0.0046, "std": 0.0004},
+            "texture_quality": {"mean": 0.77, "std": 0.02},
+        },
+        "clip_c": {
+            "detail_blur_inv": {"mean": 0.43, "std": 0.01},
+            "detail_sml": {"mean": 0.0062, "std": 0.0005},
+            "texture_quality": {"mean": 0.82, "std": 0.02},
+        },
+    }
+    all_perframe = {
+        "clip_a": {
+            "detail_blur_inv": np.array([0.57, 0.58, 0.59]),
+            "detail_sml": np.array([0.0032, 0.0035, 0.0038]),
+            "texture_quality": np.array([0.70, 0.71, 0.72]),
+        },
+        "clip_b": {
+            "detail_blur_inv": np.array([0.48, 0.49, 0.50]),
+            "detail_sml": np.array([0.0043, 0.0046, 0.0049]),
+            "texture_quality": np.array([0.76, 0.77, 0.78]),
+        },
+        "clip_c": {
+            "detail_blur_inv": np.array([0.42, 0.43, 0.44]),
+            "detail_sml": np.array([0.0059, 0.0062, 0.0065]),
+            "texture_quality": np.array([0.81, 0.82, 0.83]),
+        },
+    }
+
+    ok = add_detail_perceptual_metric(all_results, all_perframe)
+    passed = bool(ok)
+    results.append(("Perceptual Detail", "derive succeeded", 1.0 if ok else 0.0, 1.0, "==1.0", passed))
+
+    have_key = all(DETAIL_PERCEPTUAL_KEY in all_results[c] for c in all_results)
+    results.append(("Perceptual Detail", "key added", 1.0 if have_key else 0.0, 1.0, "==1.0", have_key))
+
+    # Expected ordering by design of synthetic inputs.
+    ranked = sorted(all_results.keys(),
+                    key=lambda c: all_results[c][DETAIL_PERCEPTUAL_KEY]["mean"],
+                    reverse=True)
+    expected = ["clip_a", "clip_b", "clip_c"]
+    order_ok = ranked == expected
+    results.append(("Perceptual Detail", "ordering", 1.0 if order_ok else 0.0, 1.0, "A>B>C", order_ok))
+
+    # Validate exact mean formula against clip-level z-combination.
+    blur = np.array([all_results[c]["detail_blur_inv"]["mean"] for c in expected], dtype=np.float64)
+    sml = np.array([all_results[c]["detail_sml"]["mean"] for c in expected], dtype=np.float64)
+    tex = np.array([all_results[c]["texture_quality"]["mean"] for c in expected], dtype=np.float64)
+    z_blur = (blur - blur.mean()) / blur.std()
+    z_sml = (sml - sml.mean()) / sml.std()
+    z_tex = (tex - tex.mean()) / tex.std()
+    expected_scores = z_blur - z_sml - z_tex
+    got_scores = np.array([all_results[c][DETAIL_PERCEPTUAL_KEY]["mean"] for c in expected], dtype=np.float64)
+    max_abs_err = float(np.max(np.abs(expected_scores - got_scores)))
+    formula_ok = max_abs_err < 1e-9
+    results.append(("Perceptual Detail", "formula", max_abs_err, 1e-9, "<1e-9", formula_ok))
 
     return results
 
@@ -643,6 +736,7 @@ if __name__ == "__main__":
     results += run_edge_case_tests()
     results += run_brightness_invariance_tests()
     results += run_short_name_tests()
+    results += run_detail_perceptual_tests()
     all_pass = print_results(results)
     print(f"\nTest assets saved to: {ASSETS}")
 
