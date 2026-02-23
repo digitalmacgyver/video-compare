@@ -3,4 +3,4 @@ __pycache__/
 *.pyc
 .claude/
 .playwright-mcp/
-example_report/*.json
+test_cases/assets/

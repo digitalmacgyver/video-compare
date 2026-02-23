@@ -986,13 +986,13 @@ def generate_html(data, metric_keys, title="Video Quality Report", comparisons=N
 new Chart(document.getElementById('overallChart'), {{
   type:'bar',
   data:{{ labels:{json.dumps([c for c in ranked_overall])},
-    datasets:[{{ data:{json.dumps([round(n + 1 - composites[c]["overall"], 2) for c in ranked_overall])},
+    datasets:[{{ data:{json.dumps([round(composites[c]["overall"], 2) for c in ranked_overall])},
       backgroundColor:{json.dumps([colors[c] for c in ranked_overall])},
       borderColor:{json.dumps([colors[c] for c in ranked_overall])}, borderWidth:1, borderRadius:4 }}] }},
   options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
     plugins:{{ legend:{{display:false}},
-      tooltip:{{callbacks:{{label:c=>{{const rank={json.dumps({c: round(composites[c]["overall"], 1) for c in ranked_overall})};return 'avg rank: '+rank[c.label]}}}}}} }},
-    scales:{{ x:{{min:0,max:{n},grid:{{color:'#30363d'}},ticks:{{color:'#8b949e'}},title:{{display:true,text:'Rank Score (higher = better)',color:'#8b949e'}}}}, y:{{grid:{{display:false}},ticks:{{color:'#e6edf3',font:{{size:11}}}}}} }}
+      tooltip:{{callbacks:{{label:c=>'avg rank: '+c.raw}}}} }},
+    scales:{{ x:{{reverse:true,min:1,max:{n},grid:{{color:'#30363d'}},ticks:{{color:'#8b949e'}},title:{{display:true,text:'Average Rank (lower = better)',color:'#8b949e'}}}}, y:{{grid:{{display:false}},ticks:{{color:'#e6edf3',font:{{size:11}}}}}} }}
   }}
 }});
 
@@ -1494,14 +1494,76 @@ Click any image to enlarge; use the <span style="display:inline-flex;align-items
 # MAIN
 # =====================================================================
 
+def load_and_merge_jsons(json_paths):
+    """Load one or more quality metric JSON files and merge clip data.
+
+    Returns (merged_data, merged_metric_keys) where merged_data is a dict
+    of clip_name -> metric_dict (no _metadata keys), and merged_metric_keys
+    is the intersection of metric keys across all files.
+    """
+    merged = {}
+    all_metric_sets = []
+    source_jsons = []
+
+    for jp in json_paths:
+        if not os.path.exists(jp):
+            print(f"ERROR: File not found: {jp}")
+            sys.exit(1)
+        with open(jp) as f:
+            raw = json.load(f)
+
+        meta = raw.get("_metadata", {})
+        metrics_in_file = set(meta.get("metrics", []))
+        if metrics_in_file:
+            all_metric_sets.append(metrics_in_file)
+        source_jsons.append(os.path.basename(jp))
+
+        clip_count = 0
+        for key, val in raw.items():
+            if key.startswith("_"):
+                continue
+            if key in merged:
+                print(f"WARNING: Duplicate clip '{key}' found in {jp}, overwriting previous")
+            merged[key] = val
+            clip_count += 1
+
+        print(f"  Loaded {clip_count} clip(s) from {os.path.basename(jp)}")
+
+    if not merged:
+        print("ERROR: No clip data found in any JSON file")
+        sys.exit(1)
+
+    # Metric keys: use intersection so all clips have all reported metrics
+    if all_metric_sets:
+        common_metrics = all_metric_sets[0]
+        for ms in all_metric_sets[1:]:
+            common_metrics = common_metrics & ms
+        # Preserve a sensible order: ALL_KEYS first, then extras alphabetically
+        ordered = [k for k in ALL_KEYS if k in common_metrics]
+        extras = sorted(common_metrics - set(ordered))
+        merged_metric_keys = ordered + extras
+    else:
+        # Fallback: infer from first clip's keys
+        first_clip = next(iter(merged.values()))
+        merged_metric_keys = [k for k in first_clip if isinstance(first_clip.get(k), dict)
+                              and "mean" in first_clip.get(k, {})]
+
+    print(f"  Merged: {len(merged)} clips, {len(merged_metric_keys)} common metrics")
+    print(f"  Sources: {', '.join(source_jsons)}")
+    return merged, merged_metric_keys
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="No-reference video quality metrics for analog video captures.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
-    parser.add_argument("src_dir", help="Directory containing normalized .mov files")
-    parser.add_argument("--output-dir", help="Output directory for reports (default: src_dir)")
+    parser.add_argument("src_dir", nargs="?", default=None,
+                        help="Directory containing video files (not needed with --from-json)")
+    parser.add_argument("--from-json", nargs="+", dest="from_json", metavar="JSON",
+                        help="Generate report from pre-computed JSON file(s) instead of analyzing clips")
+    parser.add_argument("--output-dir", help="Output directory for reports (default: src_dir or current dir)")
     parser.add_argument("--name", default="quality_report", help="Report filename prefix (default: quality_report)")
     parser.add_argument("--pattern", default="*.mov", help="File glob pattern (default: *.mov)")
     parser.add_argument("--text", action="store_true", help="Also generate a plain-text report")
@@ -1510,13 +1572,88 @@ def main():
     parser.add_argument("--skip", action="append", default=[],
                         help="Skip N initial frames for a clip: PATTERN:N (e.g. --skip jvctbc1:1). "
                              "PATTERN is matched as substring of clip filename. Can be repeated.")
-    parser.add_argument("--extra-detail-metrics", default="",
+    parser.add_argument("--extra-detail-metrics",
+                        default="detail_perceptual,detail_blur_inv,detail_sml",
                         help=("Comma-separated extra detail metrics to compute "
-                              f"({', '.join(EXTRA_DETAIL_KEYS)})."))
-    parser.add_argument("--report-metrics", default="",
-                        help="Comma-separated metric keys to include in HTML/TXT report (default: all computed).")
+                              f"({', '.join(EXTRA_DETAIL_KEYS)}). "
+                              "Default: %(default)s"))
+    parser.add_argument("--report-metrics",
+                        default="detail_perceptual,detail,detail_blur_inv,detail_sml,"
+                                "sharpness,edge_strength,blocking,texture_quality,"
+                                "ringing,temporal_stability,colorfulness,naturalness,"
+                                "crushed_blacks,blown_whites",
+                        help="Comma-separated metric keys to include in HTML/TXT report (default: %(default)s).")
     args = parser.parse_args()
 
+    if not args.from_json and not args.src_dir:
+        parser.error("src_dir is required unless --from-json is used")
+
+    # --from-json mode: load pre-computed data and generate report
+    if args.from_json:
+        print(f"Loading {len(args.from_json)} JSON file(s)...")
+        all_results, available_metric_keys = load_and_merge_jsons(args.from_json)
+
+        # Determine report metrics
+        if args.report_metrics:
+            report_metric_keys = parse_metric_csv(args.report_metrics)
+            missing = [k for k in report_metric_keys if k not in available_metric_keys]
+            if missing:
+                print(f"WARNING: Requested report metrics not in JSON data, dropping: {', '.join(missing)}")
+                report_metric_keys = [k for k in report_metric_keys if k in available_metric_keys]
+        else:
+            report_metric_keys = available_metric_keys
+
+        if not report_metric_keys:
+            print("ERROR: No valid report metrics available")
+            sys.exit(1)
+
+        output_dir = args.output_dir or os.path.dirname(os.path.abspath(args.from_json[0])) or "."
+        os.makedirs(output_dir, exist_ok=True)
+
+        # No comparison frames or screenshots in --from-json mode (no per-frame data or video access)
+        comparisons = None
+        samples = None
+        print(f"\nNote: Comparison frames and screenshots not available in --from-json mode.")
+
+        # Generate reports
+        run_timestamp = datetime.now()
+        ts_suffix = run_timestamp.strftime("%Y%m%d_%H%M%S")
+        json_name = f"{args.name}_{ts_suffix}.json"
+
+        # Write merged JSON
+        json_output = {
+            "_metadata": {
+                "schema_version": 3,
+                "metrics": list(available_metric_keys),
+                "n_metrics": len(available_metric_keys),
+                "report_metrics": list(report_metric_keys),
+                "source_jsons": [os.path.basename(jp) for jp in args.from_json],
+                "timestamp": run_timestamp.isoformat(),
+                "json_filename": json_name,
+            }
+        }
+        json_output.update(all_results)
+        json_path = os.path.join(output_dir, json_name)
+        with open(json_path, "w") as f:
+            json.dump(json_output, f, indent=2)
+        print(f"JSON:  {json_path}")
+
+        display_name = args.name.replace("_", " ").title() if args.name != "quality_report" else "Merged Report"
+        title = f"Video Quality Report — {display_name}"
+        html_path = os.path.join(output_dir, f"{args.name}.html")
+        with open(html_path, "w") as f:
+            f.write(generate_html(all_results, report_metric_keys, title, comparisons, samples,
+                                  json_filename=json_name))
+        print(f"HTML:  {html_path}")
+
+        if args.text:
+            txt_path = os.path.join(output_dir, f"{args.name}.txt")
+            with open(txt_path, "w") as f:
+                f.write(format_text_report(all_results, "merged", report_metric_keys))
+            print(f"Text:  {txt_path}")
+        return
+
+    # Standard mode: analyze clips from src_dir
     # Parse --skip arguments into {pattern: n_frames} dict
     skip_patterns = {}
     for s in args.skip:
