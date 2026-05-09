@@ -59,8 +59,6 @@ def compute_reference_stats(ref_path, width, height):
             sat_sum += sat.sum()
             sat_count += sat.size
             n_frames += 1
-
-        proc.wait()
     finally:
         proc.stdout.close()
         try:
@@ -121,8 +119,6 @@ def normalize_clip(src_path, out_path, ref_cdf, ref_mean_sat, width, height, fra
             src_sat_sum += sat.sum()
             src_sat_count += sat.size
             n_frames += 1
-
-        proc_r.wait()
     finally:
         proc_r.stdout.close()
         try:
