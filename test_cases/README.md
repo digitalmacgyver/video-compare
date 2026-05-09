@@ -1,6 +1,6 @@
 # Metric Validation Test Suite
 
-Synthetic test images that verify each of the 11 quality metrics responds correctly to its target artifact, plus brightness invariance checks. No external test databases required — all images are generated with NumPy/OpenCV for full reproducibility.
+Synthetic test images that verify each of the 11 core quality metrics (and the perceptual detail derived metric) responds correctly to its target artifact, plus brightness invariance checks. No external test databases required — all images are generated with NumPy/OpenCV for full reproducibility.
 
 ## Running
 

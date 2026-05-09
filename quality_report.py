@@ -22,9 +22,11 @@ Examples:
     python quality_report.py /path/to/normalized/ --pattern "*_sls.mp4" --name sls_report
     python quality_report.py /path/to/normalized/ --text
 
-Metrics (11 total, all brightness-agnostic):
-  Sharpness, edge strength, blocking, detail, texture quality, ringing, temporal stability,
-  colorfulness, naturalness, crushed blacks, blown whites
+Metrics (14 by default — 11 core + 3 extra detail; all brightness-agnostic):
+  Core: sharpness, edge strength, blocking, detail, texture quality, ringing,
+        temporal stability, colorfulness, naturalness, crushed blacks, blown whites
+  Extra detail (default on): detail_perceptual (VHS-SD), detail_blur_inv, detail_sml
+  Extra detail (opt-in via --extra-detail-metrics): detail_tenengrad
 
 Brightness-sensitive metrics (sharpness, edge strength, detail, ringing, temporal stability) are
 normalized by mean Y to eliminate dependence on capture brightness / gain settings.  No upstream
