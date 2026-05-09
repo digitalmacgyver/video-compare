@@ -3,8 +3,9 @@
 Used by quality_report.py, cross_clip_report.py, normalize.py, and normalize_linear.py.
 """
 
-import subprocess
 import os
+import subprocess
+import sys
 import json
 import numpy as np
 from scipy.stats import rankdata
@@ -207,3 +208,27 @@ def write_frame(pipe, y, u, v):
     pipe.write(y.tobytes())
     pipe.write(u.tobytes())
     pipe.write(v.tobytes())
+
+
+# =====================================================================
+# CLI HELPERS
+# =====================================================================
+
+def parse_skip_args(skip_list):
+    """Parse a list of '--skip PATTERN:N' strings into {pattern: n_frames}.
+
+    Exits with status 1 on bad format. Used by quality_report.py and
+    quality_metrics.py to ensure consistent --skip parsing.
+    """
+    skip_patterns = {}
+    for s in skip_list:
+        if ":" not in s:
+            print(f"ERROR: --skip format must be PATTERN:N, got '{s}'")
+            sys.exit(1)
+        pat, n = s.rsplit(":", 1)
+        try:
+            skip_patterns[pat] = int(n)
+        except ValueError:
+            print(f"ERROR: --skip N must be integer, got '{n}'")
+            sys.exit(1)
+    return skip_patterns

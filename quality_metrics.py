@@ -35,7 +35,7 @@ import glob
 import json
 from datetime import datetime
 
-from common import ALL_KEYS, METRIC_INFO, probe_video
+from common import ALL_KEYS, METRIC_INFO, probe_video, parse_skip_args
 from quality_report import (
     analyze_clip, add_detail_perceptual_metric, short_name,
     parse_metric_csv, EXTRA_DETAIL_KEYS, DETAIL_PERCEPTUAL_KEY,
@@ -65,17 +65,7 @@ def main():
     args = parser.parse_args()
 
     # Parse --skip arguments
-    skip_patterns = {}
-    for s in args.skip:
-        if ":" not in s:
-            print(f"ERROR: --skip format must be PATTERN:N, got '{s}'")
-            sys.exit(1)
-        pat, n = s.rsplit(":", 1)
-        try:
-            skip_patterns[pat] = int(n)
-        except ValueError:
-            print(f"ERROR: --skip N must be integer, got '{n}'")
-            sys.exit(1)
+    skip_patterns = parse_skip_args(args.skip)
 
     extra_detail_metrics = parse_metric_csv(args.extra_detail_metrics)
     unknown_extra = [k for k in extra_detail_metrics if k not in EXTRA_DETAIL_KEYS]

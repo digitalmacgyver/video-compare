@@ -49,7 +49,8 @@ from datetime import datetime
 import numpy as np
 import cv2
 from common import (ALL_KEYS, METRIC_INFO, COLORS_7, COLORS_14,
-                    compute_composites, probe_video, decode_command, read_frame)
+                    compute_composites, probe_video, decode_command, read_frame,
+                    parse_skip_args)
 
 CMP_ICON_SVG = ('<svg viewBox="0 0 24 24" width="20" height="20" fill="none" '
     'stroke="currentColor" stroke-width="2" stroke-linecap="round">'
@@ -1655,17 +1656,7 @@ def main():
 
     # Standard mode: analyze clips from src_dir
     # Parse --skip arguments into {pattern: n_frames} dict
-    skip_patterns = {}
-    for s in args.skip:
-        if ":" not in s:
-            print(f"ERROR: --skip format must be PATTERN:N, got '{s}'")
-            sys.exit(1)
-        pat, n = s.rsplit(":", 1)
-        try:
-            skip_patterns[pat] = int(n)
-        except ValueError:
-            print(f"ERROR: --skip N must be integer, got '{n}'")
-            sys.exit(1)
+    skip_patterns = parse_skip_args(args.skip)
 
     extra_detail_metrics = parse_metric_csv(args.extra_detail_metrics)
     unknown_extra = [k for k in extra_detail_metrics if k not in EXTRA_DETAIL_KEYS]
