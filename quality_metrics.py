@@ -36,10 +36,9 @@ import json
 from datetime import datetime
 
 from common import ALL_KEYS, METRIC_INFO, probe_video, parse_skip_args
-from quality_report import (
-    analyze_clip, add_detail_perceptual_metric, short_name,
-    parse_metric_csv, EXTRA_DETAIL_KEYS, DETAIL_PERCEPTUAL_KEY,
-    DETAIL_PERCEPTUAL_DEPS, DERIVED_KEYS,
+from metrics import (
+    EXTRA_DETAIL_KEYS, DETAIL_PERCEPTUAL_KEY, DETAIL_PERCEPTUAL_DEPS, DERIVED_KEYS,
+    parse_metric_csv, short_name, analyze_clip, add_detail_perceptual_metric,
 )
 
 

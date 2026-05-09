@@ -13,9 +13,9 @@ import math
 import numpy as np
 import cv2
 
-# Add project root to path so we can import from quality_report
+# Add project root to path so we can import from metrics
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from quality_report import (
+from metrics import (
     sharpness_laplacian,
     edge_strength_sobel,
     blocking_artifact_measure,
@@ -31,11 +31,9 @@ from quality_report import (
     blown_whites,
     add_detail_perceptual_metric,
     DETAIL_PERCEPTUAL_KEY,
-    compute_composites,
     short_name,
-    ALL_KEYS,
-    METRIC_INFO,
 )
+from common import compute_composites, ALL_KEYS, METRIC_INFO
 
 SIZE = 512
 ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
