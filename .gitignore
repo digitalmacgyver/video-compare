@@ -15,3 +15,6 @@ test_cases/assets/
 *_quality_report*.json
 *_quality_metrics*.json
 comparison.html
+
+# example_report/index.html lives on the gh-pages branch instead
+example_report/*.html
