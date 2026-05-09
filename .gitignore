@@ -1,6 +1,17 @@
+# Python
 venv/
-__pycache__/
+**/__pycache__/
 *.pyc
+
+# Editor / tool state
 .claude/
 .playwright-mcp/
+
+# Generated test assets
 test_cases/assets/
+
+# Generated reports — kept out of the working tree
+*_quality_report*.html
+*_quality_report*.json
+*_quality_metrics*.json
+comparison.html
