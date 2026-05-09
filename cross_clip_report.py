@@ -19,55 +19,10 @@ import re
 import sys
 import numpy as np
 from common import ALL_KEYS, METRIC_INFO, COLORS_7, COLORS_14, compute_composites
+from html_report import HTML_CSS
 
 CLIP_COLORS = ["#58a6ff", "#3fb950", "#f58231", "#e6194b", "#911eb4",
                "#42d4f4", "#ffe119", "#f032e6", "#bfef45", "#dcbeff"]
-
-
-# =====================================================================
-# CSS (shared dark theme)
-# =====================================================================
-
-HTML_CSS = """
-  :root {
-    --bg: #0d1117; --card: #161b22; --border: #30363d;
-    --text: #e6edf3; --text-dim: #8b949e; --accent: #58a6ff;
-    --good: #3fb950; --bad: #f85149; --mid: #d29922;
-    --accent2: #d2a8ff;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-    background: var(--bg); color: var(--text); line-height: 1.6; padding: 24px; max-width: 1400px; margin: 0 auto;
-  }
-  h1 { font-size: 1.8em; margin-bottom: 8px; }
-  h2 { font-size: 1.3em; margin: 40px 0 16px; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
-  h2.alt { color: var(--accent2); }
-  h3 { font-size: 1.1em; margin: 20px 0 12px; color: var(--text-dim); }
-  .subtitle { color: var(--text-dim); margin-bottom: 24px; font-size: 0.95em; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 24px; }
-  .chart-container { position: relative; width: 100%; }
-  .chart-wide { height: 520px; }
-  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-  @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
-  .heatmap { width: 100%; border-collapse: collapse; font-size: 0.85em; }
-  .heatmap th { background: #21262d; padding: 6px 5px; text-align: center; font-weight: 600;
-    border: 1px solid var(--border); white-space: nowrap; position: sticky; top: 0; z-index: 2;
-    cursor: pointer; user-select: none; }
-  .heatmap th:hover { background: #2d333b; }
-  .heatmap th::after { content: ' \\2195'; opacity: 0.3; font-size: 0.8em; }
-  .heatmap th.sort-asc::after { content: ' \\2191'; opacity: 0.8; }
-  .heatmap th.sort-desc::after { content: ' \\2193'; opacity: 0.8; }
-  .heatmap th:first-child { text-align: left; min-width: 140px; }
-  .heatmap th { border-bottom: 2px solid var(--accent); }
-  .heatmap td { padding: 5px 6px; text-align: center; border: 1px solid var(--border);
-    font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 0.92em; }
-  .heatmap td:first-child { text-align: left; font-weight: 500; }
-  .heatmap tr:hover { outline: 2px solid var(--accent); }
-  .legend-note { font-size: 0.85em; color: var(--text-dim); margin-top: 12px; }
-  .clip-tag { display: inline-block; font-size: 0.75em; padding: 2px 8px; border-radius: 4px;
-    font-weight: 600; letter-spacing: 0.5px; margin-right: 8px; }
-"""
 
 
 # =====================================================================
