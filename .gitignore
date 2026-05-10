@@ -18,3 +18,6 @@ comparison.html
 
 # example_report/index.html lives on the gh-pages branch instead
 example_report/*.html
+
+# Smoke-test outputs from tp_measure / tp_compare integration runs
+tp_smoke_outputs/
