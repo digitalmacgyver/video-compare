@@ -20,9 +20,14 @@ def detect_landmark(
     Approach:
       1. Crop a square search window centred on (ideal_x, ideal_y).
       2. Threshold dark pixels (Y10 < 0.3 * GREY_BACKGROUND_Y10 ~= 150).
-      3. Verify the dark cluster contains both a horizontal and a vertical
-         line component (a single isolated blob is rejected).
-      4. Compute the dark-weighted centroid for sub-pixel position.
+      3. Project the dark mask onto each axis; rows/columns whose dark
+         count is above the median are treated as the cross's arm spikes.
+         Reject the window if there are no spike rows or no spike columns
+         (no cross structure).
+      4. Compute the centroid of the spike columns and spike rows to
+         recover the intersection coordinate. This is robust to the cross
+         being off-centre in the search window — a 2D-mass centroid would
+         bias toward the window middle.
 
     Returns (x, y, confidence) in capture-image coords, or None when no
     plausible intersection is found. Confidence is the fraction of dark
@@ -191,4 +196,5 @@ def register(Y: np.ndarray) -> Dict[str, Any]:
         fit["quality_reason"] = "residuals exceed threshold"
     else:
         fit["quality_flag"] = "ok"
+        fit["quality_reason"] = None
     return fit
