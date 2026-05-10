@@ -1,7 +1,16 @@
 # SW2 Test Pattern Comparison Tool — Design
 
 Status: design / brainstorming complete, awaiting plan
-Date: 2026-05-10
+Date: 2026-05-10 (revised 2026-05-10 with whitepaper findings: NTSC triangle polarity resolved; Stage 3 metric inventory expanded)
+
+## Reference materials
+
+- TPG20/21 manual (PAL chart spec at page 4.25; NTSC differences at page 4.30): `/wintmp/analog_video/tp_compare/ref/tpg20_21_page_58.pdf`
+- "What is it?" overview (NTSC): `/wintmp/analog_video/tp_compare/ref/The_Snell_and_Wilcox_Test_Chart_2_What_is_it.pdf`
+- Updated NTSC text version: `/wintmp/analog_video/tp_compare/ref/tp2_description_updated_ntsc.txt`
+- **Composite Decoder Whitepaper** (decoder-class taxonomy and per-region artifact signatures): `/wintmp/analog_video/tp_compare/ref/compositedecoder_wp_tp2_sections_explained.pdf`. Provides a "Source Picture" reference of the NTSC chart and circles the regions where simple/notch/line-comb/field-comb decoders show their characteristic artifacts. Drives Stage 3 metric design (see below).
+- Engineering guides on encoding/decoding, digital video, and standards conversion (general background): `engineer_guide_*.pdf` in the same directory.
+- Existing codex starter: `/home/viblio/coding_projects/sw2_analysis/codex/analyze_tartan.py`
 
 ## Purpose
 
@@ -32,7 +41,10 @@ specs come later.
 - **Stage 2** (sketch): geometry / picture-in-raster — boundary triangles,
   registration cross, black circle.
 - **Stage 3** (sketch): frequency / burst regions — sine-grating fidelity,
-  cross-color leakage, per-field analysis where dot crawl matters.
+  plus a per-region artifact-metric inventory (cross-color, cross-luma,
+  hanging dots, chroma bandwidth) and an optional decoder-class guess,
+  driven by the composite-decoder whitepaper's taxonomy. Per-field
+  analysis is included where dot crawl matters.
 
 ## Non-goals
 
@@ -424,16 +436,62 @@ perfect decoder produce."
 
 ### Measurement model per burst ROI
 
-After registration:
+The composite-decoder whitepaper enumerates a hierarchy of decoder
+strategies — simple low-/high-pass, notch, line comb, field/temporal
+comb, frame comb, adaptive — each producing a characteristic artifact
+signature on TP2's burst regions. Stage 3 measures these signatures
+explicitly rather than collapsing them all into a single MTF number.
+
+After registration, per-ROI metrics:
+
 - **Modulation depth**: `(p95 − p5) / mean` of the Y plane within the ROI
   (or the chroma plane for chroma-modulated bursts) — proxy for MTF
   retained at that frequency.
 - **Cross-correlation** against the registered ideal grating —
   orientation-aware fidelity score (catches a decoder that low-passes vs.
   one that produces phase-shifted content).
-- **Cross-color leakage**: chroma energy in regions that should be
-  Y-only (e.g., the 3.58 MHz luma burst) — detects notch-filter leakage
-  and 2D/3D adaptive comb filter performance.
+- **Cross-color leakage**: chroma energy (|U − 512| + |V − 512|, or
+  RMS chroma magnitude) in regions that should be Y-only — e.g., the
+  3.58 MHz luma burst, the 100/200/300 TVL bursts, the radial wedge.
+  Detects notch-filter leakage, simple-decoder bandwidth limits, and
+  inadequate 2D/3D adaptive comb performance.
+- **Cross-luma residual**: high-frequency Y energy (after a high-pass
+  filter) inside regions that are pure-chroma in the source — e.g., the
+  100% red box, the magenta chroma-staircase. Detects simple/notch
+  decoders that fail to subtract chroma cleanly from luma.
+- **Hanging-dot intensity**: localized dark/bright vertical-line
+  artifacts in narrow strips above and below sharp vertical chroma
+  transitions (red box edges, magenta-staircase edges, the 1.5 MHz Y/C
+  burst region). Specifically a line-comb signature; absent in
+  field/frame-comb decoders.
+- **Chroma bandwidth**: amplitude retained in the 1.0 / 0.5 / 1.5 MHz
+  blue-yellow and green-magenta Y/C-timing bursts. A direct proxy for
+  the decoder's chroma low-pass cutoff.
+
+Each region in `tp_chart.py` carries metadata declaring which of these
+metrics applies to it (and what "ideal" looks like there), so the
+measurement loop can dispatch to the correct metric per region.
+
+### Decoder-class classification
+
+Combinations of these per-region metrics map to decoder families with
+clear physical interpretations (per the whitepaper):
+
+- High cross-color **and** high cross-luma **and** narrow chroma
+  bandwidth → simple low-/high-pass or notch decoder.
+- Low cross-color **but** strong hanging-dot signature → line-comb
+  decoder (good static H/V separation; struggles at sharp vertical
+  chroma transitions).
+- Low cross-color **and** low hanging dots **but** residual artifacts
+  on the upper-mid frequency oblique bursts → field/frame-comb decoder
+  (good static performance; loses on motion, but our static charts
+  expose the static behavior only).
+- All artifacts low across the board → adaptive decoder.
+
+Stage 3 may emit a per-capture decoder-class guess as a derived datum
+in `_meta`. This is interpretive (heuristic, not authoritative), but
+the underlying per-region metrics are unambiguous and remain the
+primary report content.
 
 ### Field-aware analysis
 
@@ -459,6 +517,12 @@ closer to the original signal.
 - MTF / fidelity table per burst region.
 - Per-capture frequency response curve (x-axis frequency / TVL, y-axis
   modulation retained), one line per capture.
+- Cross-color, cross-luma, hanging-dot, and chroma-bandwidth tables —
+  each scoped to the regions where that metric is meaningful, with the
+  ideal=0 (or ideal-band) baseline drawn alongside.
+- Decoder-class guess per capture (with a confidence note and the
+  per-metric pattern that drove it), to give readers a quick mental
+  hook before they dive into the numbers.
 - Side-by-side region thumbnails so the visual story is preserved
   alongside the numbers.
 
@@ -481,10 +545,13 @@ closer to the original signal.
   precedent. If real captures show the test pattern is unstable or
   mis-framed at index 60 in some sources, we may switch to "median across
   frames N..M" or an explicit per-capture override.
-- **NTSC version of the boundary triangles**: the "What is it?" PDF
-  describes black triangular markers; the page-58 PAL spec describes
-  white triangles on black boxes. Confirm on the real capture which
-  variant the NTSC chart uses before Stage 2 finalizes its detector.
+- ~~**NTSC version of the boundary triangles**~~ — RESOLVED: per the
+  composite-decoder whitepaper "Source Picture" (NTSC), the boundary
+  markers are **black filled triangles** on the grey background. The
+  Stage 1 synthesizer's `_draw_boundary_triangle_upper_left` already
+  draws black, which is correct. Stage 2's detector should look for
+  dark-cluster centroids inside known cells (not white-on-black template
+  matching).
 - **Grey background level**: derived from spec at 50% IRE → Y10 ≈ 502.
   Verify against the codex captures; if real captures consistently
   diverge by a known offset, treat as a measurement (a "grey-level
