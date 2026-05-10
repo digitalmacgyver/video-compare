@@ -40,9 +40,49 @@ def test_detect_landmark_off_grid_returns_none():
     assert result is None or result[2] < 0.05
 
 
+def test_fit_affine_identity():
+    pts = np.array([[100.0, 50.0], [300.0, 50.0], [200.0, 200.0],
+                    [50.0, 300.0], [400.0, 250.0]], dtype=np.float32)
+    result = tp_register.fit_affine(pts.copy(), pts.copy())
+    M = result["affine_matrix"]
+    assert M is not None
+    # Identity: M = [[1, 0, 0], [0, 1, 0]]
+    np.testing.assert_allclose(M, [[1, 0, 0], [0, 1, 0]], atol=1e-3)
+    assert result["residuals_px"]["mean"] < 1e-3
+    assert result["inliers"] == len(pts)
+
+
+def test_fit_affine_translation():
+    ideal = np.array([[100.0, 50.0], [300.0, 50.0], [200.0, 200.0],
+                      [50.0, 300.0], [400.0, 250.0]], dtype=np.float32)
+    detected = ideal + np.array([5.0, 7.0], dtype=np.float32)
+    result = tp_register.fit_affine(detected, ideal)
+    M = result["affine_matrix"]
+    assert M is not None
+    np.testing.assert_allclose(M[:, 2], [5.0, 7.0], atol=0.1)
+    np.testing.assert_allclose(M[:, :2], np.eye(2), atol=1e-3)
+    assert result["residuals_px"]["max"] < 0.5
+
+
+def test_fit_affine_rejects_outlier():
+    ideal = np.array([[100.0, 50.0], [300.0, 50.0], [200.0, 200.0],
+                      [50.0, 300.0], [400.0, 250.0], [550.0, 400.0]],
+                     dtype=np.float32)
+    # All shift by (3, 4) except the last is wildly off.
+    detected = ideal + np.array([3.0, 4.0], dtype=np.float32)
+    detected[-1] += np.array([50.0, 60.0], dtype=np.float32)
+    result = tp_register.fit_affine(detected, ideal)
+    assert result["inliers"] == 5
+    assert result["total"] == 6
+    np.testing.assert_allclose(result["affine_matrix"][:, 2], [3.0, 4.0], atol=0.1)
+
+
 TESTS = [
     test_detect_landmark_on_synthesized_ideal,
     test_detect_landmark_off_grid_returns_none,
+    test_fit_affine_identity,
+    test_fit_affine_translation,
+    test_fit_affine_rejects_outlier,
 ]
 
 

@@ -61,3 +61,74 @@ def detect_landmark(
     cx = float((weight * xx).sum() / total)
     cy = float((weight * yy).sum() / total)
     return (x0 + cx, y0 + cy, confidence)
+
+
+def fit_affine(
+    detected_pts: np.ndarray,
+    ideal_pts: np.ndarray,
+    inlier_threshold_px: float = 1.5,
+) -> Dict[str, Any]:
+    """RANSAC 2D affine fit: ideal -> detected.
+
+    Args:
+        detected_pts: shape (N, 2) of detected (x, y) in capture coords.
+        ideal_pts:    shape (N, 2) of corresponding ideal (x, y).
+        inlier_threshold_px: max residual to be considered an inlier.
+
+    Returns:
+        {
+            "affine_matrix": np.ndarray of shape (2, 3) or None,
+            "residuals_px": {"mean": float, "max": float},
+            "inliers": int,
+            "total": int,
+        }
+    """
+    import cv2
+
+    detected_pts = np.asarray(detected_pts, dtype=np.float32)
+    ideal_pts = np.asarray(ideal_pts, dtype=np.float32)
+    total = int(len(detected_pts))
+    if total < 3:
+        return {
+            "affine_matrix": None,
+            "residuals_px": {"mean": float("nan"), "max": float("nan")},
+            "inliers": 0,
+            "total": total,
+        }
+
+    M, mask = cv2.estimateAffine2D(
+        ideal_pts.reshape(-1, 1, 2),
+        detected_pts.reshape(-1, 1, 2),
+        method=cv2.RANSAC,
+        ransacReprojThreshold=float(inlier_threshold_px),
+        refineIters=10,
+    )
+    if M is None:
+        return {
+            "affine_matrix": None,
+            "residuals_px": {"mean": float("nan"), "max": float("nan")},
+            "inliers": 0,
+            "total": total,
+        }
+
+    inlier_mask = mask.flatten().astype(bool) if mask is not None else np.ones(total, dtype=bool)
+    inliers = int(inlier_mask.sum())
+
+    # Compute residuals on inliers.
+    ones = np.ones((total, 1), dtype=np.float32)
+    ideal_h = np.hstack([ideal_pts, ones])
+    pred = (M @ ideal_h.T).T  # (N, 2)
+    diffs = np.linalg.norm(pred - detected_pts, axis=1)
+    if inliers > 0:
+        mean_res = float(diffs[inlier_mask].mean())
+        max_res = float(diffs[inlier_mask].max())
+    else:
+        mean_res = float(diffs.mean())
+        max_res = float(diffs.max())
+
+    return {
+        "affine_matrix": M,
+        "residuals_px": {"mean": mean_res, "max": max_res},
+        "inliers": inliers,
+        "total": total,
+    }
