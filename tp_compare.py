@@ -132,3 +132,80 @@ def render_tartan_deltas(captures: List[Dict[str, Any]]) -> str:
   </table>
 </section>
 """
+
+
+def render_gray_deltas(captures: List[Dict[str, Any]]) -> str:
+    region_ids = [r["id"] for r in tp_chart.GRAY_REGIONS]
+    head = "<tr><th>Capture</th>" + "".join(
+        f"<th>{rid}</th>" for rid in region_ids
+    ) + "</tr>"
+
+    body_rows = []
+    for c in captures:
+        cap_name = _basename(c["_meta"]["capture"])
+        cells = [f"<td>{_h.escape(cap_name)}</td>"]
+        by_id = {g["id"]: g for g in c["grays"]}
+        for rid in region_ids:
+            g = by_id.get(rid)
+            if g is None:
+                cells.append("<td>-</td>")
+                continue
+            cls = _delta_class(g["delta_y10"])
+            cells.append(
+                f"<td class='{cls}'>"
+                f"&Delta;Y={g['delta_y10']:+.2f}"
+                f"<div class='small'>Y10={g['measured_y10']:.1f}</div>"
+                f"</td>"
+            )
+        body_rows.append("<tr>" + "".join(cells) + "</tr>")
+
+    # Chart.js linearity plot: x = ideal Y10, y = measured Y10, one dataset per capture.
+    ideals = [tp_chart.GRAY_IDEAL_Y10[i] for i in range(4)]
+    datasets = []
+    for c in captures:
+        by_id = {g["id"]: g for g in c["grays"]}
+        cap_name = _basename(c["_meta"]["capture"])
+        ys = [by_id.get(rid, {}).get("measured_y10", None) for rid in region_ids]
+        datasets.append({"label": cap_name, "data": ys})
+    chart_data = {
+        "labels": [f"{v:.1f}" for v in ideals],
+        "datasets": datasets,
+        "ideal": ideals,
+    }
+    chart_json = json.dumps(chart_data)
+
+    return f"""
+<section class="gray">
+  <h2>Gray Step Deltas + Linearity</h2>
+  <table class="data gray-table">
+    <thead>{head}</thead>
+    <tbody>
+{''.join(body_rows)}
+    </tbody>
+  </table>
+  <div class="chart-wrap">
+    <canvas id="grayLinearity" width="640" height="320"></canvas>
+  </div>
+  <script>
+    (function() {{
+      const data = {chart_json};
+      const datasets = data.datasets.map(function(ds) {{
+        return {{
+          label: ds.label,
+          data: ds.data,
+          fill: false,
+          tension: 0.0,
+        }};
+      }});
+      // Add ideal as the reference line.
+      datasets.unshift({{label: "ideal", data: data.ideal, borderDash: [5, 5], fill: false}});
+      const ctx = document.getElementById("grayLinearity").getContext("2d");
+      new Chart(ctx, {{
+        type: "line",
+        data: {{labels: data.labels, datasets: datasets}},
+        options: {{responsive: false, scales: {{y: {{title: {{display: true, text: "measured Y10"}}}}, x: {{title: {{display: true, text: "ideal Y10"}}}}}}}}
+      }});
+    }})();
+  </script>
+</section>
+"""

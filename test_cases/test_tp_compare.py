@@ -67,9 +67,35 @@ def test_render_tartan_deltas_contains_swatches_and_deltas():
     assert "background-color: rgb(" in html or "background:rgb(" in html
 
 
+def test_render_gray_deltas_contains_table_and_chart_data():
+    a = _make_capture_json("alpha")
+    a["grays"] = [
+        {"id": "G1", "name": "gray_step_20", "ideal_y10": 239.2,
+         "measured_y10": 234.0, "delta_y10": -5.2, "u10": 512.0, "v10": 512.0,
+         "patch_size_px": [6, 6]},
+        {"id": "G2", "name": "gray_step_40", "ideal_y10": 414.4,
+         "measured_y10": 406.0, "delta_y10": -8.4, "u10": 512.0, "v10": 512.0,
+         "patch_size_px": [6, 6]},
+        {"id": "G3", "name": "gray_step_60", "ideal_y10": 589.6,
+         "measured_y10": 579.0, "delta_y10": -10.6, "u10": 512.0, "v10": 512.0,
+         "patch_size_px": [6, 6]},
+        {"id": "G4", "name": "gray_step_80", "ideal_y10": 764.8,
+         "measured_y10": 752.0, "delta_y10": -12.8, "u10": 512.0, "v10": 512.0,
+         "patch_size_px": [6, 6]},
+    ]
+    html = tp_compare.render_gray_deltas([a])
+    assert "G1" in html and "G4" in html
+    assert "-5.2" in html or "-5.20" in html
+    assert "-12.8" in html or "-12.80" in html
+    # Chart.js data block
+    assert "Chart" in html
+    assert "239.2" in html  # ideal Y10 for G1
+
+
 TESTS = [
     test_render_registration_summary_contains_per_capture_data,
     test_render_tartan_deltas_contains_swatches_and_deltas,
+    test_render_gray_deltas_contains_table_and_chart_data,
 ]
 
 
