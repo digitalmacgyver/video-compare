@@ -99,12 +99,54 @@ def test_extract_pad_720x480_dvd_like(tmp_dir):
     assert offsets["top"] == 3 and offsets["bottom"] == 3
 
 
+def test_sample_region_on_synthesized_identity():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    identity = np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
+    yel = next(r for r in tp_chart.TARTAN_REGIONS if r["id"] == "YEL")
+    measurement = tp_measure.sample_region(Y, U, V, yel, identity)
+    assert abs(measurement["measured_yuv10"][0] - yel["expected"]["y10"]) < 1.0
+    assert abs(measurement["measured_yuv10"][1] - yel["expected"]["u10"]) < 1.0
+    assert abs(measurement["measured_yuv10"][2] - yel["expected"]["v10"]) < 1.0
+    assert abs(measurement["delta_yuv10"][0]) < 1.0
+    assert abs(measurement["delta_yuv10"][1]) < 1.0
+    assert abs(measurement["delta_yuv10"][2]) < 1.0
+
+
+def test_sample_region_with_translation():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    # Translate ideal -> capture by (5, 7): a YEL pixel at ideal (cx,cy) is
+    # actually at (cx+5, cy+7) in the capture. So affine = [[1,0,5],[0,1,7]].
+    M = np.array([[1, 0, 5], [0, 1, 7]], dtype=np.float32)
+    # Roll the synthesized frame by (5, 7) to simulate a shifted capture.
+    Y_shifted = np.roll(np.roll(Y, 5, axis=1), 7, axis=0)
+    U_shifted = np.roll(np.roll(U, 5 // 2, axis=1), 7, axis=0)
+    V_shifted = np.roll(np.roll(V, 5 // 2, axis=1), 7, axis=0)
+    yel = next(r for r in tp_chart.TARTAN_REGIONS if r["id"] == "YEL")
+    measurement = tp_measure.sample_region(Y_shifted, U_shifted, V_shifted, yel, M)
+    assert abs(measurement["delta_yuv10"][0]) < 5.0
+
+
+def test_pad_to_486_raises_on_oversized_height():
+    Y = np.zeros((576, 720), dtype=np.uint16)
+    U = np.zeros((576, 360), dtype=np.uint16)
+    V = np.zeros((576, 360), dtype=np.uint16)
+    raised = False
+    try:
+        tp_measure.pad_to_486(Y, U, V)
+    except ValueError:
+        raised = True
+    assert raised, "expected ValueError for height > 486"
+
+
 TESTS_TMPDIR = [
     test_extract_frame_yuv422p10le_720x486,
     test_extract_pad_720x480_dvd_like,
 ]
 TESTS_NO_TMPDIR = [
     test_pad_to_486_centers_grey,
+    test_sample_region_on_synthesized_identity,
+    test_sample_region_with_translation,
+    test_pad_to_486_raises_on_oversized_height,
 ]
 
 

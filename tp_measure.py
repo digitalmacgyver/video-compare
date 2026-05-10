@@ -96,7 +96,9 @@ def pad_to_486(
     width = Y.shape[1]
     if width != 720:
         raise ValueError(f"unexpected width {width}; expected 720")
-    if height >= 486:
+    if height > 486:
+        raise ValueError(f"height {height} exceeds NTSC 486; cannot pad down")
+    if height == 486:
         return Y, U, V, {"top": 0, "bottom": 0, "left": 0, "right": 0}
     delta = 486 - height
     top = delta // 2
@@ -114,4 +116,70 @@ def pad_to_486(
     V_padded = _pad(V, width // 2, grey_c)
     return Y_padded, U_padded, V_padded, {
         "top": top, "bottom": bottom, "left": 0, "right": 0
+    }
+
+
+def _apply_affine(M: np.ndarray, x: float, y: float) -> Tuple[float, float]:
+    a, b, tx = M[0]
+    c, d, ty = M[1]
+    return a * x + b * y + tx, c * x + d * y + ty
+
+
+def sample_region(
+    Y: np.ndarray, U: np.ndarray, V: np.ndarray,
+    region: Dict[str, Any], affine: np.ndarray,
+) -> Dict[str, Any]:
+    """Sample the centre window of `region` from a registered capture.
+
+    `affine` maps ideal coords -> capture coords (2x3, applied as
+    [a, b, tx; c, d, ty]).
+    """
+    x, y, w, h = region["ideal_box"]
+    cx_ideal = x + w / 2.0
+    cy_ideal = y + h / 2.0
+    cx_cap, cy_cap = _apply_affine(affine, cx_ideal, cy_ideal)
+
+    size_frac = float(region["sample"]["size_frac"])
+    half_w = max(1, int(round(w * size_frac / 2.0)))
+    half_h = max(1, int(round(h * size_frac / 2.0)))
+
+    x0 = max(0, int(round(cx_cap)) - half_w)
+    x1 = min(Y.shape[1], int(round(cx_cap)) + half_w)
+    y0 = max(0, int(round(cy_cap)) - half_h)
+    y1 = min(Y.shape[0], int(round(cy_cap)) + half_h)
+
+    y_patch = Y[y0:y1, x0:x1].astype(np.float64)
+    # Chroma subsampled: x is at 2x luma resolution.
+    cx0, cx1 = x0 // 2, max(x0 // 2 + 1, x1 // 2)
+    u_patch = U[y0:y1, cx0:cx1].astype(np.float64)
+    v_patch = V[y0:y1, cx0:cx1].astype(np.float64)
+
+    measured = (
+        float(y_patch.mean()) if y_patch.size else float("nan"),
+        float(u_patch.mean()) if u_patch.size else float("nan"),
+        float(v_patch.mean()) if v_patch.size else float("nan"),
+    )
+    e = region["expected"]
+    delta = (
+        measured[0] - e["y10"],
+        measured[1] - e["u10"],
+        measured[2] - e["v10"],
+    )
+
+    # Saturation as ratio of chroma-magnitude vs ideal.
+    measured_chroma = ((measured[1] - tp_chart.CHROMA_CENTER) ** 2
+                       + (measured[2] - tp_chart.CHROMA_CENTER) ** 2) ** 0.5
+    ideal_chroma = ((e["u10"] - tp_chart.CHROMA_CENTER) ** 2
+                    + (e["v10"] - tp_chart.CHROMA_CENTER) ** 2) ** 0.5
+    sat_pct = (measured_chroma / ideal_chroma * 100.0) if ideal_chroma > 1e-6 else None
+
+    return {
+        "id": region["id"],
+        "name": region["name"],
+        "ideal_yuv10": [e["y10"], e["u10"], e["v10"]],
+        "measured_yuv10": list(measured),
+        "delta_yuv10": list(delta),
+        "sat_pct_vs_ideal": sat_pct,
+        "patch_size_px": [x1 - x0, y1 - y0],
+        "patch_center_capture_xy": [cx_cap, cy_cap],
     }
