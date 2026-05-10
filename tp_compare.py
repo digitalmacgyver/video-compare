@@ -11,6 +11,8 @@ import json
 import os
 from typing import Any, Dict, List
 
+import tp_chart
+
 
 def _basename(path: str) -> str:
     return os.path.basename(path)
@@ -64,6 +66,68 @@ def render_registration_summary(captures: List[Dict[str, Any]]) -> str:
     </thead>
     <tbody>
 {table_body}
+    </tbody>
+  </table>
+</section>
+"""
+
+
+def _swatch(rgb_tuple) -> str:
+    r, g, b = rgb_tuple
+    return f"<span class='swatch' style='background-color: rgb({r},{g},{b});'></span>"
+
+
+def _delta_class(d: float) -> str:
+    a = abs(d)
+    if a < 5:
+        return "delta-good"
+    if a < 15:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def render_tartan_deltas(captures: List[Dict[str, Any]]) -> str:
+    # Use TARTAN_REGIONS as the canonical column ordering.
+    region_ids = [r["id"] for r in tp_chart.TARTAN_REGIONS]
+
+    head = "<tr><th>Capture</th>" + "".join(
+        f"<th>{rid}</th>" for rid in region_ids
+    ) + "</tr>"
+
+    body_rows = []
+    for c in captures:
+        cap_name = _basename(c["_meta"]["capture"])
+        cells = [f"<td>{_h.escape(cap_name)}</td>"]
+        by_id = {p["id"]: p for p in c["tartan"]}
+        for rid in region_ids:
+            p = by_id.get(rid)
+            if p is None:
+                cells.append("<td>-</td>")
+                continue
+            ideal_rgb = tp_chart.yuv10_to_rgb8(*p["ideal_yuv10"])
+            meas_rgb = tp_chart.yuv10_to_rgb8(*p["measured_yuv10"])
+            dy, du, dv = p["delta_yuv10"]
+            cls = _delta_class(dy)
+            cells.append(
+                f"<td class='{cls}'>"
+                f"{_swatch(ideal_rgb)}{_swatch(meas_rgb)}"
+                f"<div class='delta'>"
+                f"&Delta;Y={dy:+.1f}<br>"
+                f"&Delta;U={du:+.1f}<br>"
+                f"&Delta;V={dv:+.1f}"
+                f"</div></td>"
+            )
+        body_rows.append("<tr>" + "".join(cells) + "</tr>")
+
+    body = "\n".join(body_rows)
+    return f"""
+<section class="tartan">
+  <h2>Tartan Deltas (measured vs ideal)</h2>
+  <p>Each cell shows ideal swatch | measured swatch and the YUV10 deltas.</p>
+  <table class="data tartan-table">
+    <thead>{head}</thead>
+    <tbody>
+{body}
     </tbody>
   </table>
 </section>

@@ -54,8 +54,22 @@ def test_render_registration_summary_contains_per_capture_data():
     assert "warn" in html
 
 
+def test_render_tartan_deltas_contains_swatches_and_deltas():
+    a = _make_capture_json("alpha")
+    b = _make_capture_json("beta")
+    # Mutate one delta in beta to verify it gets rendered.
+    b["tartan"][0]["delta_yuv10"] = [-50.0, 5.0, -2.0]
+    b["tartan"][0]["measured_yuv10"] = [596.0, 181.0, 565.0]
+    html = tp_compare.render_tartan_deltas([a, b])
+    assert "YEL" in html
+    assert "-50" in html or "-50.0" in html
+    # Should include an inline-style swatch background-color (rgb)
+    assert "background-color: rgb(" in html or "background:rgb(" in html
+
+
 TESTS = [
     test_render_registration_summary_contains_per_capture_data,
+    test_render_tartan_deltas_contains_swatches_and_deltas,
 ]
 
 
