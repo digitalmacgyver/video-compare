@@ -81,33 +81,119 @@ def test_synthesize_gray_strip_centers():
         assert abs(y_sample - r["expected"]["y10"]) < 1.0, (
             f"{r['id']} Y10: got {y_sample:.1f}, want {r['expected']['y10']:.1f}"
         )
-        assert int(round(u_sample)) == 512
-        assert int(round(v_sample)) == 512
+        assert int(round(u_sample)) == 512, (
+            f"{r['id']} U10: got {u_sample:.1f}, want 512"
+        )
+        assert int(round(v_sample)) == 512, (
+            f"{r['id']} V10: got {v_sample:.1f}, want 512"
+        )
 
 
-TESTS = [
+def test_synthesize_boundary_triangle_present():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    # Boundary-triangle cell is the 30x27 box at x in [0,30), y in [81,108).
+    cell = Y[81:108, 0:30]
+    # Should contain a meaningful chunk of black pixels (the triangle interior).
+    # Grid lines alone contribute ~82 px; the filled triangle adds ~200 more.
+    black_count = int((cell == tp_chart.BLACK_Y10).sum())
+    assert black_count > 150, (
+        f"boundary-triangle cell has only {black_count} black pixels "
+        f"(out of {cell.size}); expected triangle interior (>150)"
+    )
+
+
+def test_cli_writes_png(tmp_dir):
+    import subprocess
+    out = os.path.join(tmp_dir, "ideal.png")
+    cmd = ["python", "tp_synthesize.py", "--raster", "720x486", "--output", out]
+    subprocess.run(cmd, check=True, cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    assert os.path.exists(out)
+    # PNG should be 720x486
+    import cv2
+    img = cv2.imread(out)
+    assert img.shape == (486, 720, 3)
+
+
+def test_cli_writes_yuv(tmp_dir):
+    import subprocess
+    out = os.path.join(tmp_dir, "ideal.yuv")
+    cmd = ["python", "tp_synthesize.py", "--raster", "720x486", "--output", out]
+    subprocess.run(cmd, check=True, cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    assert os.path.exists(out)
+    # yuv422p10le: (720*486 + 2 * 360*486) * 2 bytes
+    expected_size = (720 * 486 + 2 * 360 * 486) * 2
+    assert os.path.getsize(out) == expected_size
+
+
+def test_fill_box_rejects_odd_x():
+    Y = np.zeros((100, 100), dtype=np.uint16)
+    U = np.zeros((100, 50), dtype=np.uint16)
+    V = np.zeros((100, 50), dtype=np.uint16)
+    raised = False
+    try:
+        tp_synthesize._fill_box_yuv422(Y, U, V, (1, 0, 10, 10), 512, 512, 512)
+    except AssertionError:
+        raised = True
+    assert raised, "expected AssertionError for odd x"
+
+
+def test_fill_box_rejects_odd_w():
+    Y = np.zeros((100, 100), dtype=np.uint16)
+    U = np.zeros((100, 50), dtype=np.uint16)
+    V = np.zeros((100, 50), dtype=np.uint16)
+    raised = False
+    try:
+        tp_synthesize._fill_box_yuv422(Y, U, V, (0, 0, 11, 10), 512, 512, 512)
+    except AssertionError:
+        raised = True
+    assert raised, "expected AssertionError for odd w"
+
+
+import tempfile
+import shutil
+
+TESTS_NO_TMPDIR = [
     test_synthesize_shapes,
     test_synthesize_grey_background_dominates,
     test_synthesize_chroma_centred_off_color_regions,
     test_synthesize_grid_intersections_dark,
     test_synthesize_tartan_centers,
     test_synthesize_gray_strip_centers,
+    test_synthesize_boundary_triangle_present,
+    test_fill_box_rejects_odd_x,
+    test_fill_box_rejects_odd_w,
+]
+TESTS_TMPDIR = [
+    test_cli_writes_png,
+    test_cli_writes_yuv,
 ]
 
 
 def main():
     failed = 0
-    for t in TESTS:
+    for t in TESTS_NO_TMPDIR:
         try:
             t()
             print(f"PASS  {t.__name__}")
         except Exception as e:
             failed += 1
             print(f"FAIL  {t.__name__}: {e}")
+    tmp = tempfile.mkdtemp(prefix="tp_synth_test_")
+    try:
+        for t in TESTS_TMPDIR:
+            try:
+                t(tmp)
+                print(f"PASS  {t.__name__}")
+            except Exception as e:
+                failed += 1
+                print(f"FAIL  {t.__name__}: {e}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    total = len(TESTS_NO_TMPDIR) + len(TESTS_TMPDIR)
     if failed:
-        print(f"\n{failed}/{len(TESTS)} tests failed")
+        print(f"\n{failed}/{total} tests failed")
         sys.exit(1)
-    print(f"\nAll {len(TESTS)} tests passed")
+    print(f"\nAll {total} tests passed")
 
 
 if __name__ == "__main__":

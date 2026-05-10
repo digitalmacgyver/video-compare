@@ -89,6 +89,24 @@ def _draw_gray_strip(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> None:
         _fill_box_yuv422(Y, U, V, r["ideal_box"], e["y10"], e["u10"], e["v10"])
 
 
+def _draw_boundary_triangle_upper_left(Y: np.ndarray) -> None:
+    """Black filled triangle inside the (0..30, 81..108) cell, pointing right.
+
+    For Stage 1 we render only the upper-left boundary-triangle cell; the
+    other three corners are added in Stage 2 along with their detectors.
+    The shape is a simple right-pointing triangle, vertices roughly:
+       (3, 84)  top-left
+       (3, 105) bottom-left
+       (24, 94) right tip
+    Drawn by filling row-by-row.
+    """
+    for r in range(84, 106):
+        # Distance from the apex row 94 (range 0..11)
+        d = abs(r - 94)
+        x_right = max(4, 24 - int(round(21 * d / 11)))
+        Y[r, 3:x_right] = tp_chart.BLACK_Y10
+
+
 def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build the ideal SW2 frame as (Y, U, V) uint16 planes (yuv422p10le)."""
     if width % 2 != 0:
@@ -97,4 +115,59 @@ def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndar
     _draw_grid(Y)
     _draw_tartan(Y, U, V)
     _draw_gray_strip(Y, U, V)
+    _draw_boundary_triangle_upper_left(Y)
     return Y, U, V
+
+
+# =====================================================================
+# CLI
+# =====================================================================
+
+def _yuv422p10_to_bgr8(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> np.ndarray:
+    """Convert yuv422p10le planes to 8-bit BGR for image writing."""
+    h, w = Y.shape
+    U_full = np.repeat(U, 2, axis=1)[:, :w]
+    V_full = np.repeat(V, 2, axis=1)[:, :w]
+    y = (Y.astype(np.float32) - tp_chart.BLACK_Y10) / tp_chart.Y_RANGE
+    cb = (U_full.astype(np.float32) - tp_chart.CHROMA_CENTER) / 896.0
+    cr = (V_full.astype(np.float32) - tp_chart.CHROMA_CENTER) / 896.0
+    r = np.clip(y + 1.402 * cr, 0.0, 1.0)
+    g = np.clip(y - 0.344136 * cb - 0.714136 * cr, 0.0, 1.0)
+    b = np.clip(y + 1.772 * cb, 0.0, 1.0)
+    bgr = np.stack([b, g, r], axis=-1) * 255.0
+    return bgr.astype(np.uint8)
+
+
+def _write_yuv422p10le(path: str, Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> None:
+    with open(path, "wb") as f:
+        f.write(Y.astype("<u2").tobytes())
+        f.write(U.astype("<u2").tobytes())
+        f.write(V.astype("<u2").tobytes())
+
+
+def _parse_raster(s: str) -> Tuple[int, int]:
+    w, h = s.lower().split("x")
+    return int(w), int(h)
+
+
+def _main():
+    import argparse
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--raster", default="720x486", help="WIDTHxHEIGHT")
+    p.add_argument("--output", required=True, help="output file (.png or .yuv)")
+    args = p.parse_args()
+    w, h = _parse_raster(args.raster)
+    Y, U, V = synthesize(w, h)
+    if args.output.endswith(".png"):
+        import cv2
+        bgr = _yuv422p10_to_bgr8(Y, U, V)
+        cv2.imwrite(args.output, bgr)
+    elif args.output.endswith(".yuv"):
+        _write_yuv422p10le(args.output, Y, U, V)
+    else:
+        raise SystemExit("output must end in .png or .yuv")
+    print(f"wrote {args.output} ({w}x{h})")
+
+
+if __name__ == "__main__":
+    _main()
