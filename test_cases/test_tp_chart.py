@@ -90,11 +90,12 @@ def test_gray_regions():
         assert approx(r["expected"]["y10"], expected_y, 0.05)
         assert r["expected"]["u10"] == 512
         assert r["expected"]["v10"] == 512
+        assert r["sample"] == {"kind": "center_window", "size_frac": 0.2}
 
 
 def test_grid_landmarks():
     lms = tp_chart.GRID_LANDMARKS
-    assert len(lms) >= 6
+    assert len(lms) == 8
     for lm in lms:
         assert "id" in lm
         assert 0 < lm["ideal_x"] < 720

@@ -84,8 +84,8 @@ GRAY_BOX_W = 30
 GRAY_BOX_H = 27
 
 _TARTAN_TOP_ROW_Y = 0
-_TARTAN_BOT_ROW_Y = 27
-_GRAY_ROW_Y = 54
+_TARTAN_BOT_ROW_Y = TARTAN_BOX_H
+_GRAY_ROW_Y = 2 * TARTAN_BOX_H
 
 _TARTAN_TOP_COLORS = [
     ("YEL",   "yellow_75",   0.75, 0.75, 0.00),
@@ -107,8 +107,8 @@ _TARTAN_BOT_EXPECTED = [
 _SAMPLE = {"kind": "center_window", "size_frac": 0.2}
 
 
-def _box(col: int, row_y: int, w: int = TARTAN_BOX_W, h: int = TARTAN_BOX_H):
-    return (col * TARTAN_BOX_W, row_y, w, h)
+def _box(col: int, row_y: int, w: int = TARTAN_BOX_W, h: int = TARTAN_BOX_H) -> tuple:
+    return (col * w, row_y, w, h)
 
 
 def _build_tartan_regions():
@@ -121,7 +121,7 @@ def _build_tartan_regions():
             "kind": "tartan_rect",
             "ideal_box": _box(col, _TARTAN_TOP_ROW_Y),
             "expected": {"y10": y10, "u10": u10, "v10": v10},
-            "sample": _SAMPLE,
+            "sample": _SAMPLE.copy(),
         })
     for col, (rid, name, y10, u10, v10) in enumerate(_TARTAN_BOT_EXPECTED):
         regions.append({
@@ -130,7 +130,7 @@ def _build_tartan_regions():
             "kind": "tartan_rect",
             "ideal_box": _box(col, _TARTAN_BOT_ROW_Y),
             "expected": {"y10": y10, "u10": u10, "v10": v10},
-            "sample": _SAMPLE,
+            "sample": _SAMPLE.copy(),
         })
     return regions
 
@@ -143,7 +143,7 @@ def _build_gray_regions():
             "kind": "gray_step",
             "ideal_box": _box(i, _GRAY_ROW_Y, GRAY_BOX_W, GRAY_BOX_H),
             "expected": {"y10": GRAY_IDEAL_Y10[i], "u10": 512, "v10": 512},
-            "sample": _SAMPLE,
+            "sample": _SAMPLE.copy(),
         }
         for i in range(4)
     ]
