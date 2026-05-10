@@ -77,12 +77,46 @@ def test_fit_affine_rejects_outlier():
     np.testing.assert_allclose(result["affine_matrix"][:, 2], [3.0, 4.0], atol=0.1)
 
 
+def test_register_identity_on_synthesized_ideal():
+    Y, _, _ = tp_synthesize.synthesize(720, 486)
+    result = tp_register.register(Y)
+    assert result["affine_matrix"] is not None
+    np.testing.assert_allclose(result["affine_matrix"], [[1, 0, 0], [0, 1, 0]], atol=0.5)
+    assert result["residuals_px"]["mean"] < 0.6
+    assert result["quality_flag"] == "ok"
+    assert result["inliers"] >= len(tp_chart.GRID_LANDMARKS) - 1
+
+
+def test_register_recovers_translation():
+    Y, _, _ = tp_synthesize.synthesize(720, 486)
+    # Shift the synthesized frame down-right by (4, 3) by rolling the array.
+    shifted = np.roll(np.roll(Y, 4, axis=1), 3, axis=0)
+    result = tp_register.register(shifted)
+    assert result["affine_matrix"] is not None
+    np.testing.assert_allclose(
+        result["affine_matrix"][:, 2], [4.0, 3.0], atol=0.7
+    )
+    np.testing.assert_allclose(result["affine_matrix"][:, :2], np.eye(2), atol=0.05)
+    assert result["quality_flag"] == "ok"
+
+
+def test_register_quality_flag_failure_when_no_landmarks_detect():
+    # All-grey frame: no grid -> no detections.
+    Y = np.full((486, 720), tp_chart.GREY_BACKGROUND_Y10, dtype=np.uint16)
+    result = tp_register.register(Y)
+    assert result["quality_flag"] == "failed"
+    assert result["affine_matrix"] is None
+
+
 TESTS = [
     test_detect_landmark_on_synthesized_ideal,
     test_detect_landmark_off_grid_returns_none,
     test_fit_affine_identity,
     test_fit_affine_translation,
     test_fit_affine_rejects_outlier,
+    test_register_identity_on_synthesized_ideal,
+    test_register_recovers_translation,
+    test_register_quality_flag_failure_when_no_landmarks_detect,
 ]
 
 

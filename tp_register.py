@@ -45,21 +45,29 @@ def detect_landmark(
         return None
     confidence = dark_count / win.size
 
-    # Reject single blob (no cross): require both >=3 columns and >=3 rows
-    # to contain dark pixels.
-    cols_with_dark = int(dark_mask.any(axis=0).sum())
-    rows_with_dark = int(dark_mask.any(axis=1).sum())
-    if cols_with_dark < 3 or rows_with_dark < 3:
+    # Intersection detection via column/row projections.
+    # The vertical grid line appears as a spike in the column projection
+    # (many dark pixels per column), while non-vertical columns have only the
+    # horizontal line's 3 dark pixels. Taking columns above the median isolates
+    # the vertical bar; similarly for rows and the horizontal bar. This gives
+    # the sub-pixel intersection position even when the cross is not centred in
+    # the search window (e.g. after a global frame shift).
+    col_proj = dark_mask.sum(axis=0).astype(np.float32)
+    row_proj = dark_mask.sum(axis=1).astype(np.float32)
+
+    col_med = float(np.median(col_proj))
+    row_med = float(np.median(row_proj))
+    col_high = col_proj > col_med
+    row_high = row_proj > row_med
+
+    if col_high.sum() < 1 or row_high.sum() < 1:
         return None
 
-    # Weighted centroid: weight = (grey - Y10), clipped non-negative.
-    weight = np.clip(tp_chart.GREY_BACKGROUND_Y10 - win, 0.0, None) * dark_mask
-    total = float(weight.sum())
-    if total <= 0.0:
-        return None
-    yy, xx = np.indices(win.shape, dtype=np.float32)
-    cx = float((weight * xx).sum() / total)
-    cy = float((weight * yy).sum() / total)
+    col_idxs = np.where(col_high)[0].astype(np.float32)
+    cx = float((col_proj[col_high] * col_idxs).sum() / col_proj[col_high].sum())
+    row_idxs = np.where(row_high)[0].astype(np.float32)
+    cy = float((row_proj[row_high] * row_idxs).sum() / row_proj[row_high].sum())
+
     return (x0 + cx, y0 + cy, confidence)
 
 
@@ -132,3 +140,55 @@ def fit_affine(
         "inliers": inliers,
         "total": total,
     }
+
+
+# Quality-flag thresholds. Placeholder values, calibrated on real data later.
+RESIDUAL_OK_MEAN_PX = 2.0
+RESIDUAL_OK_MAX_PX = 4.0
+MIN_INLIERS = 4
+
+
+def register(Y: np.ndarray) -> Dict[str, Any]:
+    """Top-level: detect all GRID_LANDMARKS and fit an affine.
+
+    Returns a dict suitable for embedding in tp_measure's per-capture JSON
+    under `_meta.registration`.
+    """
+    detected: List[Tuple[float, float]] = []
+    ideal: List[Tuple[float, float]] = []
+    detected_lm_ids: List[str] = []
+    for lm in tp_chart.GRID_LANDMARKS:
+        det = detect_landmark(Y, lm["ideal_x"], lm["ideal_y"], lm["search_window_px"])
+        if det is None:
+            continue
+        dx, dy, _ = det
+        detected.append((dx, dy))
+        ideal.append((lm["ideal_x"], lm["ideal_y"]))
+        detected_lm_ids.append(lm["id"])
+
+    if len(detected) < MIN_INLIERS:
+        return {
+            "affine_matrix": None,
+            "residuals_px": {"mean": float("nan"), "max": float("nan")},
+            "inliers": len(detected),
+            "total": len(tp_chart.GRID_LANDMARKS),
+            "landmarks_used": detected_lm_ids,
+            "quality_flag": "failed",
+            "quality_reason": f"only {len(detected)} landmark(s) detected",
+        }
+
+    fit = fit_affine(np.asarray(detected, dtype=np.float32),
+                     np.asarray(ideal, dtype=np.float32))
+    fit["total"] = len(tp_chart.GRID_LANDMARKS)
+    fit["landmarks_used"] = detected_lm_ids
+    if (fit["affine_matrix"] is None
+            or fit["inliers"] < MIN_INLIERS):
+        fit["quality_flag"] = "failed"
+        fit["quality_reason"] = "RANSAC failed or too few inliers"
+    elif (fit["residuals_px"]["mean"] > RESIDUAL_OK_MEAN_PX
+          or fit["residuals_px"]["max"] > RESIDUAL_OK_MAX_PX):
+        fit["quality_flag"] = "warn"
+        fit["quality_reason"] = "residuals exceed threshold"
+    else:
+        fit["quality_flag"] = "ok"
+    return fit
