@@ -138,9 +138,69 @@ def test_pad_to_486_raises_on_oversized_height():
     assert raised, "expected ValueError for height > 486"
 
 
+def test_measure_end_to_end_zero_deltas(tmp_dir):
+    capture_path = os.path.join(tmp_dir, "ideal.mov")
+    json_path = os.path.join(tmp_dir, "out.json")
+    _write_synthesized_prores(capture_path, 720, 486, frames=5)
+    cmd = [
+        "python", "tp_measure.py", capture_path,
+        "--frame", "0",
+        "--output", json_path,
+    ]
+    subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
+    with open(json_path) as f:
+        data = json.load(f)
+    assert data["_meta"]["raster_in"] == [720, 486]
+    assert data["_meta"]["registration"]["quality_flag"] == "ok"
+    assert len(data["tartan"]) == 8
+    assert len(data["grays"]) == 4
+    # On the synthesized ideal, all deltas should be tiny.
+    for patch in data["tartan"]:
+        assert abs(patch["delta_yuv10"][0]) < 2.0, patch
+    for g in data["grays"]:
+        assert abs(g["delta_y10"]) < 1.0, g
+
+
+def test_measure_end_to_end_dvd_padding(tmp_dir):
+    capture_path = os.path.join(tmp_dir, "dvd.mov")
+    json_path = os.path.join(tmp_dir, "dvd.json")
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    Y480, U480, V480 = Y[3:483, :], U[3:483, :], V[3:483, :]
+    raw = (Y480.astype("<u2").tobytes()
+           + U480.astype("<u2").tobytes()
+           + V480.astype("<u2").tobytes())
+    enc_cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "rawvideo", "-pix_fmt", "yuv422p10le",
+        "-s", "720x480", "-r", "30000/1001",
+        "-i", "pipe:0", "-frames:v", "5",
+        "-c:v", "prores_ks", "-profile:v", "3",
+        "-pix_fmt", "yuv422p10le", "-vendor", "apl0",
+        capture_path,
+    ]
+    proc = subprocess.Popen(enc_cmd, stdin=subprocess.PIPE)
+    for _ in range(5):
+        proc.stdin.write(raw)
+    proc.stdin.close()
+    proc.wait()
+    assert proc.returncode == 0
+    cmd = [
+        "python", "tp_measure.py", capture_path,
+        "--frame", "0", "--output", json_path,
+    ]
+    subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
+    with open(json_path) as f:
+        data = json.load(f)
+    assert data["_meta"]["raster_in"] == [720, 480]
+    assert data["_meta"]["padding_offsets"] == {"top": 3, "bottom": 3, "left": 0, "right": 0}
+    assert data["_meta"]["registration"]["quality_flag"] in ("ok", "warn")
+
+
 TESTS_TMPDIR = [
     test_extract_frame_yuv422p10le_720x486,
     test_extract_pad_720x480_dvd_like,
+    test_measure_end_to_end_zero_deltas,
+    test_measure_end_to_end_dvd_padding,
 ]
 TESTS_NO_TMPDIR = [
     test_pad_to_486_centers_grey,

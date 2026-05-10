@@ -122,7 +122,7 @@ def pad_to_486(
 def _apply_affine(M: np.ndarray, x: float, y: float) -> Tuple[float, float]:
     a, b, tx = M[0]
     c, d, ty = M[1]
-    return a * x + b * y + tx, c * x + d * y + ty
+    return float(a * x + b * y + tx), float(c * x + d * y + ty)
 
 
 def sample_region(
@@ -183,3 +183,96 @@ def sample_region(
         "patch_size_px": [x1 - x0, y1 - y0],
         "patch_center_capture_xy": [cx_cap, cy_cap],
     }
+
+
+import hashlib
+import sys
+
+
+def _ideal_for_md5():
+    import tp_synthesize
+    return tp_synthesize.synthesize(720, 486)
+
+
+def _ideal_frame_md5() -> str:
+    Y, U, V = _ideal_for_md5()
+    h = hashlib.md5()
+    h.update(Y.tobytes())
+    h.update(U.tobytes())
+    h.update(V.tobytes())
+    return h.hexdigest()
+
+
+def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
+    Y, U, V, meta = extract_frame(capture_path, frame_index)
+    Y_p, U_p, V_p, padding = pad_to_486(Y, U, V)
+    meta["raster_processed"] = [720, 486]
+    meta["padding_offsets"] = padding
+
+    if meta["progressive_warning"]:
+        print(
+            f"WARNING: source field_order={meta['field_order']} indicates "
+            f"progressive scan; SW2 analysis assumes interlaced source.",
+            file=sys.stderr,
+        )
+
+    reg = tp_register.register(Y_p)
+    meta["registration"] = {
+        "affine": reg["affine_matrix"].tolist() if reg["affine_matrix"] is not None else None,
+        "residuals_px": reg["residuals_px"],
+        "inliers": reg["inliers"],
+        "total": reg["total"],
+        "landmarks_used": reg["landmarks_used"],
+        "quality_flag": reg["quality_flag"],
+        "quality_reason": reg.get("quality_reason"),
+    }
+
+    if reg["affine_matrix"] is None:
+        raise RuntimeError(
+            f"registration failed for {capture_path}: "
+            f"{reg.get('quality_reason', 'no affine')}"
+        )
+
+    M = reg["affine_matrix"]
+    tartan = [sample_region(Y_p, U_p, V_p, r, M) for r in tp_chart.TARTAN_REGIONS]
+    grays_raw = [sample_region(Y_p, U_p, V_p, r, M) for r in tp_chart.GRAY_REGIONS]
+    # Reshape gray records to the schema in the spec (flat ideal_y10 + delta_y10).
+    grays = []
+    for r, raw in zip(tp_chart.GRAY_REGIONS, grays_raw):
+        grays.append({
+            "id": r["id"],
+            "name": r["name"],
+            "ideal_y10": r["expected"]["y10"],
+            "measured_y10": raw["measured_yuv10"][0],
+            "delta_y10": raw["delta_yuv10"][0],
+            "u10": raw["measured_yuv10"][1],
+            "v10": raw["measured_yuv10"][2],
+            "patch_size_px": raw["patch_size_px"],
+        })
+
+    meta["ideal_frame_md5"] = _ideal_frame_md5()
+    meta["tp_chart_version"] = tp_chart.TP_CHART_VERSION
+    meta["tool_version"] = _TOOL_VERSION
+
+    return {"_meta": meta, "tartan": tartan, "grays": grays}
+
+
+def _main():
+    import argparse
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("capture", help="path to capture (mov/avi/mkv/...)")
+    p.add_argument("--frame", type=int, default=60, help="frame index (default 60)")
+    p.add_argument("--output", required=True, help="output JSON path")
+    args = p.parse_args()
+    data = measure(args.capture, args.frame)
+    with open(args.output, "w") as f:
+        json.dump(data, f, indent=2, default=float)
+    print(
+        f"wrote {args.output}: "
+        f"registration={data['_meta']['registration']['quality_flag']}, "
+        f"residuals_mean={data['_meta']['registration']['residuals_px']['mean']:.2f}px"
+    )
+
+
+if __name__ == "__main__":
+    _main()
