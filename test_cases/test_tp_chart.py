@@ -53,12 +53,75 @@ def test_yuv10_to_rgb8_round_trip():
     assert approx(b8, 128, 1)
 
 
+def test_tartan_regions_count_and_ids():
+    ids = [r["id"] for r in tp_chart.TARTAN_REGIONS]
+    assert len(ids) == 8
+    assert set(ids) == {"YEL", "CYN", "BLU", "RED",
+                        "MAG_L", "GRN_L", "RED_L", "CYN_L"}
+
+
+def test_tartan_region_record_shape():
+    for r in tp_chart.TARTAN_REGIONS:
+        assert "id" in r and "name" in r and "kind" in r
+        assert r["kind"] == "tartan_rect"
+        x, y, w, h = r["ideal_box"]
+        assert w > 0 and h > 0
+        assert 0 <= x and x + w <= 720
+        assert 0 <= y and y + h <= 486
+        assert "expected" in r
+        assert "y10" in r["expected"] and "u10" in r["expected"] and "v10" in r["expected"]
+        assert r["sample"] == {"kind": "center_window", "size_frac": 0.2}
+
+
+def test_tartan_75_yellow_expected():
+    yel = next(r for r in tp_chart.TARTAN_REGIONS if r["id"] == "YEL")
+    e = yel["expected"]
+    assert approx(e["y10"], 646.1, 0.5)
+    assert approx(e["u10"], 176.0, 1.0)
+    assert approx(e["v10"], 566.7, 1.0)
+
+
+def test_gray_regions():
+    assert len(tp_chart.GRAY_REGIONS) == 4
+    ids = [r["id"] for r in tp_chart.GRAY_REGIONS]
+    assert ids == ["G1", "G2", "G3", "G4"]
+    for r, expected_y in zip(tp_chart.GRAY_REGIONS, tp_chart.GRAY_IDEAL_Y10):
+        assert r["kind"] == "gray_step"
+        assert approx(r["expected"]["y10"], expected_y, 0.05)
+        assert r["expected"]["u10"] == 512
+        assert r["expected"]["v10"] == 512
+
+
+def test_grid_landmarks():
+    lms = tp_chart.GRID_LANDMARKS
+    assert len(lms) >= 6
+    for lm in lms:
+        assert "id" in lm
+        assert 0 < lm["ideal_x"] < 720
+        assert 0 < lm["ideal_y"] < 486
+        assert lm["search_window_px"] >= 16
+
+
+def test_grid_landmark_distribution():
+    # At least one landmark in each vertical third of the picture
+    ys = [lm["ideal_y"] for lm in tp_chart.GRID_LANDMARKS]
+    assert any(y < 162 for y in ys), "need landmark in upper third"
+    assert any(162 <= y < 324 for y in ys), "need landmark in middle third"
+    assert any(y >= 324 for y in ys), "need landmark in lower third"
+
+
 TESTS = [
     test_constants_exist,
     test_rgb_norm_to_yuv10_black,
     test_rgb_norm_to_yuv10_white,
     test_rgb_norm_to_yuv10_75_yellow,
     test_yuv10_to_rgb8_round_trip,
+    test_tartan_regions_count_and_ids,
+    test_tartan_region_record_shape,
+    test_tartan_75_yellow_expected,
+    test_gray_regions,
+    test_grid_landmarks,
+    test_grid_landmark_distribution,
 ]
 
 
