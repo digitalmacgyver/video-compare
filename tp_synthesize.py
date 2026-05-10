@@ -65,15 +65,26 @@ def _fill_box_yuv422(
 ) -> None:
     """Fill a rectangular box in all three planes with the given YUV codes."""
     x, y, w, h = box
+    assert x % 2 == 0 and w % 2 == 0, (
+        f"_fill_box_yuv422 requires even x and w for exact 4:2:2 alignment; "
+        f"got x={x}, w={w}"
+    )
     Y[y:y + h, x:x + w] = int(round(y10))
-    # 4:2:2 chroma: x is at 2x luma resolution.
     cx0, cx1 = x // 2, (x + w) // 2
     U[y:y + h, cx0:cx1] = int(round(u10))
     V[y:y + h, cx0:cx1] = int(round(v10))
 
 
 def _draw_tartan(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> None:
+    """Render the 4x2 tartan region by filling each box with its ideal YUV10 codes."""
     for r in tp_chart.TARTAN_REGIONS:
+        e = r["expected"]
+        _fill_box_yuv422(Y, U, V, r["ideal_box"], e["y10"], e["u10"], e["v10"])
+
+
+def _draw_gray_strip(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> None:
+    """Render the 4-step gray strip by filling each box with its ideal Y10 code."""
+    for r in tp_chart.GRAY_REGIONS:
         e = r["expected"]
         _fill_box_yuv422(Y, U, V, r["ideal_box"], e["y10"], e["u10"], e["v10"])
 
@@ -85,4 +96,5 @@ def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndar
     Y, U, V = _make_grey_planes(width, height)
     _draw_grid(Y)
     _draw_tartan(Y, U, V)
+    _draw_gray_strip(Y, U, V)
     return Y, U, V

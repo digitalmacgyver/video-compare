@@ -70,12 +70,28 @@ def test_synthesize_tartan_centers():
         )
 
 
+def test_synthesize_gray_strip_centers():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    for r in tp_chart.GRAY_REGIONS:
+        x, y, w, h = r["ideal_box"]
+        cx, cy = x + w // 2, y + h // 2
+        y_sample = float(Y[cy - 1:cy + 2, cx - 1:cx + 2].mean())
+        u_sample = float(U[cy - 1:cy + 2, cx // 2 - 1:cx // 2 + 2].mean())
+        v_sample = float(V[cy - 1:cy + 2, cx // 2 - 1:cx // 2 + 2].mean())
+        assert abs(y_sample - r["expected"]["y10"]) < 1.0, (
+            f"{r['id']} Y10: got {y_sample:.1f}, want {r['expected']['y10']:.1f}"
+        )
+        assert int(round(u_sample)) == 512
+        assert int(round(v_sample)) == 512
+
+
 TESTS = [
     test_synthesize_shapes,
     test_synthesize_grey_background_dominates,
     test_synthesize_chroma_centred_off_color_regions,
     test_synthesize_grid_intersections_dark,
     test_synthesize_tartan_centers,
+    test_synthesize_gray_strip_centers,
 ]
 
 
