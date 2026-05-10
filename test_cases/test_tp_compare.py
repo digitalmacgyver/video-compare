@@ -92,26 +92,59 @@ def test_render_gray_deltas_contains_table_and_chart_data():
     assert "239.2" in html  # ideal Y10 for G1
 
 
-TESTS = [
+def test_compare_cli_writes_html(tmp_dir):
+    import subprocess
+    a = _make_capture_json("alpha")
+    b = _make_capture_json("beta")
+    a_path = os.path.join(tmp_dir, "a.json")
+    b_path = os.path.join(tmp_dir, "b.json")
+    out_path = os.path.join(tmp_dir, "report.html")
+    with open(a_path, "w") as f:
+        json.dump(a, f)
+    with open(b_path, "w") as f:
+        json.dump(b, f)
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    subprocess.run(
+        ["python", "tp_compare.py", a_path, b_path, "--output", out_path],
+        check=True, cwd=project_root,
+    )
+    with open(out_path) as f:
+        html = f.read()
+    assert "<html" in html
+    assert "Registration Summary" in html
+    assert "Tartan Deltas" in html
+    assert "Gray Step Deltas" in html
+    assert "Chart.js" in html or "chart.js" in html  # CDN script reference
+
+
+TESTS_NO_TMPDIR = [
     test_render_registration_summary_contains_per_capture_data,
     test_render_tartan_deltas_contains_swatches_and_deltas,
     test_render_gray_deltas_contains_table_and_chart_data,
 ]
+TESTS_TMPDIR = [test_compare_cli_writes_html]
 
 
 def main():
     failed = 0
-    for t in TESTS:
+    for t in TESTS_NO_TMPDIR:
         try:
-            t()
-            print(f"PASS  {t.__name__}")
+            t(); print(f"PASS  {t.__name__}")
         except Exception as e:
-            failed += 1
-            print(f"FAIL  {t.__name__}: {e}")
+            failed += 1; print(f"FAIL  {t.__name__}: {e}")
+    tmp = tempfile.mkdtemp(prefix="tp_compare_test_")
+    try:
+        for t in TESTS_TMPDIR:
+            try:
+                t(tmp); print(f"PASS  {t.__name__}")
+            except Exception as e:
+                failed += 1; print(f"FAIL  {t.__name__}: {e}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    total = len(TESTS_NO_TMPDIR) + len(TESTS_TMPDIR)
     if failed:
-        print(f"\n{failed}/{len(TESTS)} tests failed")
-        sys.exit(1)
-    print(f"\nAll {len(TESTS)} tests passed")
+        print(f"\n{failed}/{total} tests failed"); sys.exit(1)
+    print(f"\nAll {total} tests passed")
 
 
 if __name__ == "__main__":

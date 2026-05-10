@@ -209,3 +209,63 @@ def render_gray_deltas(captures: List[Dict[str, Any]]) -> str:
   </script>
 </section>
 """
+
+
+_CSS = """
+body { background: #181a1f; color: #d8dde6; font-family: system-ui, sans-serif; margin: 24px; }
+h1 { color: #fff; }
+h2 { color: #fff; border-bottom: 1px solid #2a2e36; padding-bottom: 4px; }
+table.data { border-collapse: collapse; margin: 12px 0; }
+table.data th, table.data td { border: 1px solid #2a2e36; padding: 6px 10px; vertical-align: top; }
+table.data th { background: #21252b; color: #fff; }
+.swatch { display: inline-block; width: 18px; height: 18px; border: 1px solid #444; margin-right: 4px; vertical-align: middle; }
+.delta { font-size: 11px; margin-top: 4px; color: #b8c0cc; }
+.delta-good { background: rgba(80,200,120,0.10); }
+.delta-warn { background: rgba(240,180,80,0.15); }
+.delta-bad  { background: rgba(220,80,80,0.18); }
+.ok   { color: #61c08f; font-weight: 600; }
+.warn { color: #f0b450; font-weight: 600; }
+.bad  { color: #e26464; font-weight: 600; }
+.small { font-size: 11px; color: #b8c0cc; }
+code { color: #c5d1e0; }
+"""
+
+
+def render_page(captures: List[Dict[str, Any]]) -> str:
+    title = f"SW2 Comparison — {len(captures)} captures"
+    sections = (
+        render_registration_summary(captures)
+        + render_tartan_deltas(captures)
+        + render_gray_deltas(captures)
+    )
+    return f"""<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<title>{_h.escape(title)}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>{_CSS}</style>
+</head><body>
+<h1>{_h.escape(title)}</h1>
+{sections}
+</body></html>
+"""
+
+
+def _main():
+    import argparse
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("inputs", nargs="+", help="per-capture JSON files from tp_measure")
+    p.add_argument("--output", required=True, help="output HTML path")
+    args = p.parse_args()
+    captures = []
+    for path in args.inputs:
+        with open(path) as f:
+            captures.append(json.load(f))
+    html = render_page(captures)
+    with open(args.output, "w") as f:
+        f.write(html)
+    print(f"wrote {args.output} ({len(captures)} captures)")
+
+
+if __name__ == "__main__":
+    _main()
