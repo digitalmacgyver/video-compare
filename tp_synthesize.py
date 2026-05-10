@@ -54,11 +54,35 @@ def _draw_grid(Y: np.ndarray) -> None:
             Y[y0:y1, :] = tp_chart.BLACK_Y10
 
 
+def _fill_box_yuv422(
+    Y: np.ndarray,
+    U: np.ndarray,
+    V: np.ndarray,
+    box: Tuple[int, int, int, int],
+    y10: float,
+    u10: float,
+    v10: float,
+) -> None:
+    """Fill a rectangular box in all three planes with the given YUV codes."""
+    x, y, w, h = box
+    Y[y:y + h, x:x + w] = int(round(y10))
+    # 4:2:2 chroma: x is at 2x luma resolution.
+    cx0, cx1 = x // 2, (x + w) // 2
+    U[y:y + h, cx0:cx1] = int(round(u10))
+    V[y:y + h, cx0:cx1] = int(round(v10))
+
+
+def _draw_tartan(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> None:
+    for r in tp_chart.TARTAN_REGIONS:
+        e = r["expected"]
+        _fill_box_yuv422(Y, U, V, r["ideal_box"], e["y10"], e["u10"], e["v10"])
+
+
 def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build the ideal SW2 frame as (Y, U, V) uint16 planes (yuv422p10le)."""
     if width % 2 != 0:
         raise ValueError(f"width must be even for yuv422p; got {width}")
     Y, U, V = _make_grey_planes(width, height)
     _draw_grid(Y)
-    # Tartan + gray + boundary triangle added in subsequent tasks.
+    _draw_tartan(Y, U, V)
     return Y, U, V

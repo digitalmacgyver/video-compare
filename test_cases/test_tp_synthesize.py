@@ -50,11 +50,32 @@ def test_synthesize_grid_intersections_dark():
         )
 
 
+def test_synthesize_tartan_centers():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    for r in tp_chart.TARTAN_REGIONS:
+        x, y, w, h = r["ideal_box"]
+        cx, cy = x + w // 2, y + h // 2
+        # Sample a 3x3 patch at the box centre to avoid grid edges.
+        y_sample = float(Y[cy - 1:cy + 2, cx - 1:cx + 2].mean())
+        u_sample = float(U[cy - 1:cy + 2, cx // 2 - 1:cx // 2 + 2].mean())
+        v_sample = float(V[cy - 1:cy + 2, cx // 2 - 1:cx // 2 + 2].mean())
+        assert abs(y_sample - r["expected"]["y10"]) < 2.0, (
+            f"{r['id']} Y10: got {y_sample:.1f}, want {r['expected']['y10']:.1f}"
+        )
+        assert abs(u_sample - r["expected"]["u10"]) < 2.0, (
+            f"{r['id']} U10: got {u_sample:.1f}, want {r['expected']['u10']:.1f}"
+        )
+        assert abs(v_sample - r["expected"]["v10"]) < 2.0, (
+            f"{r['id']} V10: got {v_sample:.1f}, want {r['expected']['v10']:.1f}"
+        )
+
+
 TESTS = [
     test_synthesize_shapes,
     test_synthesize_grey_background_dominates,
     test_synthesize_chroma_centred_off_color_regions,
     test_synthesize_grid_intersections_dark,
+    test_synthesize_tartan_centers,
 ]
 
 
