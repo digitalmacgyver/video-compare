@@ -174,6 +174,24 @@ def test_fill_box_rejects_odd_w():
     assert raised, "expected AssertionError for odd w"
 
 
+def test_synthesize_renders_registration_cross():
+    Y, _, _ = tp_synthesize.synthesize(720, 486)
+    rc = tp_chart.REGISTRATION_CROSS
+    cx, cy = rc["ideal_x"], rc["ideal_y"]
+    # Cross center is white.
+    assert Y[cy, cx] >= 800
+    # Pixels 5-6 px from center along the horizontal arm are white.
+    for dx in (-6, -5, 5, 6):
+        assert Y[cy, cx + dx] >= 800, f"horiz arm at dx={dx} not bright"
+    # Pixels 5-6 px from center along the vertical arm are white.
+    for dy in (-6, -5, 5, 6):
+        assert Y[cy + dy, cx] >= 800, f"vert arm at dy={dy} not bright"
+    # The black box surrounds the cross: 3 px below center and 5 px right
+    # of center is outside both arms (horiz arm is on the cy row +/- arm_th,
+    # vert arm is on the cx column +/- arm_th), so should be box-black.
+    assert Y[cy - 3, cx + 5] == tp_chart.BLACK_Y10
+
+
 import tempfile
 import shutil
 
@@ -187,6 +205,7 @@ TESTS_NO_TMPDIR = [
     test_synthesize_renders_all_four_boundary_triangles,
     test_synthesize_back_corners_of_each_triangle_are_black,
     test_synthesize_old_placeholder_cell_no_longer_triangle,
+    test_synthesize_renders_registration_cross,
     test_fill_box_rejects_odd_x,
     test_fill_box_rejects_odd_w,
 ]

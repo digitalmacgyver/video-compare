@@ -114,6 +114,27 @@ def _draw_boundary_triangles(Y: np.ndarray) -> None:
         _fill_triangle_y(Y, bc1, bc2, apex)
 
 
+def _draw_registration_cross(Y: np.ndarray) -> None:
+    """Render the registration cross from tp_chart.REGISTRATION_CROSS.
+
+    A black square (box_size_px wide) with a white plus inside it
+    (ideal_arm_len_px tip-to-tip, ideal_arm_thickness_px wide).
+    """
+    rc = tp_chart.REGISTRATION_CROSS
+    cx, cy = rc["ideal_x"], rc["ideal_y"]
+    box = rc["box_size_px"]
+    arm_len = rc["ideal_arm_len_px"]
+    arm_th  = rc["ideal_arm_thickness_px"]
+    half_box = box // 2
+    half_len = arm_len // 2
+    half_th  = arm_th // 2
+    # Black box
+    Y[cy - half_box:cy + half_box, cx - half_box:cx + half_box] = tp_chart.BLACK_Y10
+    # White cross arms
+    Y[cy - half_th:cy + half_th + 1, cx - half_len:cx + half_len + 1] = tp_chart.WHITE_Y10
+    Y[cy - half_len:cy + half_len + 1, cx - half_th:cx + half_th + 1] = tp_chart.WHITE_Y10
+
+
 def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build the ideal SW2 frame as (Y, U, V) uint16 planes (yuv422p10le)."""
     if width % 2 != 0:
@@ -123,6 +144,7 @@ def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndar
     _draw_tartan(Y, U, V)
     _draw_gray_strip(Y, U, V)
     _draw_boundary_triangles(Y)
+    _draw_registration_cross(Y)
     return Y, U, V
 
 
