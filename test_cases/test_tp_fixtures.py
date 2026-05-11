@@ -15,9 +15,9 @@ def test_fixture_identity_ground_truth_matches_chart_catalog():
     assert U.shape == (486, 360)
     assert V.shape == (486, 360)
 
-    # 12 grid intersections with ids L1..L12
+    # Grid intersections — count and ids match whatever the catalog is.
     grids = gt["grid_intersections"]
-    assert len(grids) == 12
+    assert len(grids) == len(tp_chart.GRID_LANDMARKS)
     for lm in tp_chart.GRID_LANDMARKS:
         assert grids[lm["id"]] == (lm["ideal_x"], lm["ideal_y"])
 

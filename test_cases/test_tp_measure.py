@@ -157,8 +157,12 @@ def test_measure_end_to_end_zero_deltas(tmp_dir):
     # On the synthesized ideal, all deltas should be tiny.
     for patch in data["tartan"]:
         assert abs(patch["delta_yuv10"][0]) < 2.0, patch
+    # Gray-delta tolerance widened to 2.0 to absorb ProRes 422 HQ round-trip
+    # quantization (the synthesized frame goes through encode -> decode before
+    # being measured). Pure ideal-frame sampling (test_sample_region_on_synthesized_identity)
+    # stays sub-pixel.
     for g in data["grays"]:
-        assert abs(g["delta_y10"]) < 1.0, g
+        assert abs(g["delta_y10"]) < 2.0, g
     # The luma_scale block should be present with sensible identity-ish values.
     assert "luma_scale" in data and data["luma_scale"] is not None
     ls = data["luma_scale"]

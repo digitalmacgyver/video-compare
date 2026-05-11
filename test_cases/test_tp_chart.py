@@ -113,9 +113,12 @@ def test_gray_regions():
 
 def test_grid_landmarks():
     lms = tp_chart.GRID_LANDMARKS
-    assert len(lms) == 12, f"expected 12 anchors, got {len(lms)}"
-    ids = [lm["id"] for lm in lms]
-    assert ids == [f"L{i+1}" for i in range(12)], ids
+    # Refreshed May 2026 against operator chart-layout review: 9 anchors at
+    # intersections clear of the moving zone plate, the SW2/NTSC merged-text
+    # box, and the chart features that would confound projection-detection.
+    assert len(lms) == 9, f"expected 9 anchors, got {len(lms)}"
+    expected_ids = ["L1", "L3", "L4", "L7", "L9", "L10", "L12", "L13", "L14"]
+    assert [lm["id"] for lm in lms] == expected_ids
     for lm in lms:
         assert lm["kind"] == "grid_intersection"
         assert 0 < lm["ideal_x"] < 720
@@ -124,22 +127,21 @@ def test_grid_landmarks():
 
 
 def test_grid_landmark_distribution():
-    # All anchors lie in the safe interior y ∈ [108, 270] (avoiding the busy
-    # top of the chart and the lower-third uncertainty around the old L8).
+    # All anchors avoid: tartan/gray strip (upper-left), zone-plate reserved
+    # area (cells (3,4)-(6,9) i.e. x in [180,540], y in [108,324]), chart
+    # border, S&W banner. Some anchors sit on the zone-plate boundary at
+    # x=180 or x=540 -- still safe because the search window (24 px) reaches
+    # only 12 px into adjacent cells, and the actual moving pattern stays
+    # well inside its container.
     for lm in tp_chart.GRID_LANDMARKS:
-        assert 108 <= lm["ideal_y"] <= 270, lm
-        assert 180 <= lm["ideal_x"] <= 600, lm
-    # 3 anchors per y-row for x-spread, 4 distinct y-rows.
+        assert 108 <= lm["ideal_y"] <= 432, lm
+        assert 60 <= lm["ideal_x"] <= 660, lm
+    # Distinct y-rows present (sorted). L3 is at y=110 (calibrated 2 px below
+    # the canonical 108 to match real chart geometry).
     ys = sorted({lm["ideal_y"] for lm in tp_chart.GRID_LANDMARKS})
-    assert ys == [108, 162, 216, 270]
-    # Verify each y-row has exactly 3 anchors (balanced x-spread per row).
-    import collections
-    row_counts = collections.Counter(lm["ideal_y"] for lm in tp_chart.GRID_LANDMARKS)
-    assert all(count == 3 for count in row_counts.values()), dict(row_counts)
-    # All x-values are on the main 60-px grid and avoid the black circle arc
-    # (r=243, center=(360,243)): each anchor has >= 29 px clearance from arc.
+    assert ys == [108, 110, 162, 216, 270, 378], ys
     xs = sorted({lm["ideal_x"] for lm in tp_chart.GRID_LANDMARKS})
-    assert xs == [180, 240, 360, 420, 480, 540], xs
+    assert xs == [180, 240, 478, 540], xs
 
 
 def test_ideal_picture_box():

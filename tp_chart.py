@@ -104,10 +104,15 @@ _TARTAN_BOT_COLORS = [
     ("CYN2", "cyan_75_b",   0.00, 0.75, 0.75),   # same color as top CYN, different position
 ]
 
-# Calibrated centers in 720x486 ideal coords (see tp_smoke_outputs/snellhd_calib.json).
-_TARTAN_TOP_CENTERS = [(16, 10), (46, 10), (76,  9), (108, 9)]
-_TARTAN_BOT_CENTERS = [(16, 28), (47, 29), (77, 29), (107, 29)]
-_GRAY_CENTERS       = [(17, 44), (47, 44), (77, 43), (106, 44)]
+# Calibrated centers in 720x486 ideal coords.
+# - Initial values from tp_smoke_outputs/snellhd_calib.json (May 10 2026).
+# - Operator nudge May 11 2026: shift YEL/CYN +2y, BLU/RED +3y, MAG/GRN/RED2/CYN2 +1y,
+#   G1/G2 +2y, G3/G4 +3y -- previous values landed slightly above the visual
+#   center of each box, with G3/G4 close enough to the bottom-tartan row above
+#   that gray-sampling picked up a chroma cast.
+_TARTAN_TOP_CENTERS = [(16, 12), (46, 12), (76, 12), (108, 12)]
+_TARTAN_BOT_CENTERS = [(16, 29), (47, 30), (77, 30), (107, 30)]
+_GRAY_CENTERS       = [(17, 46), (47, 46), (77, 46), (106, 47)]
 
 _SAMPLE = {"kind": "center_window", "size_frac": 0.2}
 
@@ -210,14 +215,32 @@ IDEAL_PICTURE_BOX_CORNERS = [
 # residuals against a single-affine fit on the real captures.
 
 _LANDMARK_GRID = [
-    # (id, ideal_x, ideal_y) — 12 anchors, 3 per y-row, all ≥ 29 px clear of
-    # the black circle arc (r=243). Original corners at x=180/540 on y=108 and
-    # x=600 on y=162/270 fell within the 24-px search window of the arc and
-    # were replaced with x=240/480 (y=108), x=480 (y=162), x=540 (y=270).
-    ("L1",  240, 108), ("L2",  360, 108), ("L3",  480, 108),
-    ("L4",  180, 162), ("L5",  360, 162), ("L6",  480, 162),
-    ("L7",  180, 216), ("L8",  360, 216), ("L9",  540, 216),
-    ("L10", 180, 270), ("L11", 420, 270), ("L12", 540, 270),
+    # (id, ideal_x, ideal_y) — May 2026 catalog refresh after chart-layout
+    # review (docs/sw2_chart_layout.md). Anchors dropped:
+    #   L2  (360, 108): the cells above L2 are the merged 2-wide "SW2/NTSC"
+    #                   text box (cells (2,6)+(2,7)) with no vertical grid
+    #                   line at x=360 — no proper "+" intersection here.
+    #   L5  (360, 162), L6 (480, 162),
+    #   L8  (360, 216), L11 (420, 270): all sit inside the moving zone-plate
+    #                   reserved area (cells (3,4)–(6,9)) where the chart
+    #                   pattern is non-deterministic per frame.
+    # Adjusted:
+    #   L3: 2 px down + 2 px left to match the actual chart's intersection.
+    # Added:
+    #   L13, L14 at (180, 378) and (540, 378) — shared corners of empty /
+    #   circle-only cells just below the zone plate and above the S&W banner.
+    # Remaining anchors (L1, L4, L7, L9, L10, L12) are reported by the
+    # operator to sit within 1–2 px of the actual intersection; further
+    # nudges pending operator review.
+    ("L1",  240, 108),
+    ("L3",  478, 110),
+    ("L4",  180, 162),
+    ("L7",  180, 216),
+    ("L9",  540, 216),
+    ("L10", 180, 270),
+    ("L12", 540, 270),
+    ("L13", 180, 378),
+    ("L14", 540, 378),
 ]
 
 GRID_LANDMARKS = [
