@@ -62,73 +62,91 @@ def yuv10_to_rgb8(y10: float, u10: float, v10: float) -> Tuple[int, int, int]:
 # IDEAL FRAME LAYOUT (720x486 active raster)
 # =====================================================================
 #
-# Top-left tartan + gray region (Stage 1 scope):
+# Top-left tartan + gray region (Stage 1 scope). Centers are calibrated
+# from the Snell HD SDI capture (see tp_calibrate.py + the snellhd_calib.json
+# checked in under tp_smoke_outputs/).
 #
-#   x: [0, 30) [30, 60) [60, 90) [90, 120)
-#   y: [0, 27)   YEL    CYN     BLU     RED       <- 75% top tartan row
-#   y: [27, 54)  MAG_L  GRN_L   RED_L   CYN_L     <- low-sat bottom tartan row
-#   y: [54, 81)  G1     G2      G3      G4        <- 20/40/60/80% gray strip
-#   y: [81, 108) (boundary triangle cell, Stage 2)
+#   Top tartan row    y ~10 :  YEL    CYN    BLU    RED        (75% colors)
+#   Bottom tartan row y ~29 :  MAG    GRN    RED2   CYN2       (75% colors)
+#   Gray strip        y ~44 :  G1     G2     G3     G4         (20/40/60/80% IRE)
 #
-# Coordinates are inclusive of x, exclusive of x+w (NumPy slicing convention).
-# Sample windows are 20% of the box, centered.
+# The bottom tartan row contains the OTHER 75% SMPTE colors (magenta, green)
+# plus repeats of red and cyan to create vertical chroma transitions between
+# rows -- the comb-decoder vertical-transient test the SW2 spec describes.
+# Earlier code mislabelled this row as "low saturation"; the codex starter's
+# y=40 sample window straddled the bottom tartan AND the gray strip, mixing
+# saturated chroma with neutral gray to produce values that *looked* like a
+# low-sat row. Calibration against real captures confirmed the bottom row is
+# full 75% saturation.
 #
-# These coordinates may need calibration against real captures (the existing
-# codex starter measured a 30x27 fine cell with row centers at y=13 and y=40
-# for tartan, which agrees with this layout). Initial smoke testing on real
-# sources will confirm or refine.
+# Box dimensions are smaller than the previous 30x27 guess to match the
+# actual content height in the chart (rows are ~18-20 px tall, gray strip is
+# ~10 px tall). Sample window = box * sample.size_frac (defaults to 0.2).
 
 TARTAN_BOX_W = 30
-TARTAN_BOX_H = 27
+TARTAN_BOX_H = 18
 GRAY_BOX_W = 30
-GRAY_BOX_H = 27
+GRAY_BOX_H = 10
 
-_TARTAN_TOP_ROW_Y = 0
-_TARTAN_BOT_ROW_Y = TARTAN_BOX_H
-_GRAY_ROW_Y = 2 * TARTAN_BOX_H
-
+# (id, name, R, G, B) at 75% saturation. Same Rec.601 math for top and bottom;
+# the difference is only the SMPTE color picked per column.
 _TARTAN_TOP_COLORS = [
-    ("YEL",   "yellow_75",   0.75, 0.75, 0.00),
-    ("CYN",   "cyan_75",     0.00, 0.75, 0.75),
-    ("BLU",   "blue_75",     0.00, 0.00, 0.75),
-    ("RED",   "red_75",      0.75, 0.00, 0.00),
+    ("YEL",  "yellow_75",   0.75, 0.75, 0.00),
+    ("CYN",  "cyan_75",     0.00, 0.75, 0.75),
+    ("BLU",  "blue_75",     0.00, 0.00, 0.75),
+    ("RED",  "red_75",      0.75, 0.00, 0.00),
 ]
 
-# Bottom row: low-saturation companions, codex-named.  Targets are taken from
-# the codex sample measurements (the TPG generator values, transcribed from
-# captures known to be close to ideal). Not a 25%-of-something formula.
-_TARTAN_BOT_EXPECTED = [
-    ("MAG_L",  "magenta_low",  267.0, 587.0, 607.0),
-    ("GRN_L",  "green_low",    420.0, 436.0, 416.0),
-    ("RED_L",  "red_low",      473.0, 474.0, 626.0),
-    ("CYN_L",  "cyan_low",     675.0, 549.0, 397.0),
+_TARTAN_BOT_COLORS = [
+    ("MAG",  "magenta_75",  0.75, 0.00, 0.75),
+    ("GRN",  "green_75",    0.00, 0.75, 0.00),
+    ("RED2", "red_75_b",    0.75, 0.00, 0.00),   # same color as top RED, different position
+    ("CYN2", "cyan_75_b",   0.00, 0.75, 0.75),   # same color as top CYN, different position
 ]
+
+# Calibrated centers in 720x486 ideal coords (see tp_smoke_outputs/snellhd_calib.json).
+_TARTAN_TOP_CENTERS = [(16, 10), (46, 10), (76,  9), (108, 9)]
+_TARTAN_BOT_CENTERS = [(16, 28), (47, 29), (77, 29), (107, 29)]
+_GRAY_CENTERS       = [(17, 44), (47, 44), (77, 43), (106, 44)]
 
 _SAMPLE = {"kind": "center_window", "size_frac": 0.2}
 
 
-def _box(col: int, row_y: int, w: int = TARTAN_BOX_W, h: int = TARTAN_BOX_H) -> tuple:
-    return (col * w, row_y, w, h)
+def _box_from_center(cx: int, cy: int, w: int, h: int) -> tuple:
+    """Convert a (cx, cy, w, h) into an (x, y, w, h) box anchored at the
+    top-left. Used to fit the existing region "ideal_box" schema.
+
+    The starting x is snapped to even so the box satisfies the 4:2:2 chroma
+    alignment contract enforced by tp_synthesize._fill_box_yuv422. With w=30
+    (even), `cx - 15` is odd when cx is even — snap right by 1 px in that
+    case. The resulting <=1 px box shift is well inside the flat interior
+    of the tartan/gray content, so sampling is unaffected.
+    """
+    x = cx - w // 2
+    if x % 2 != 0:
+        x += 1
+    return (x, cy - h // 2, w, h)
 
 
 def _build_tartan_regions():
     regions = []
-    for col, (rid, name, r, g, b) in enumerate(_TARTAN_TOP_COLORS):
+    for (rid, name, r, g, b), (cx, cy) in zip(_TARTAN_TOP_COLORS, _TARTAN_TOP_CENTERS):
         y10, u10, v10 = rgb_norm_to_yuv10(r, g, b)
         regions.append({
             "id": rid,
             "name": name,
             "kind": "tartan_rect",
-            "ideal_box": _box(col, _TARTAN_TOP_ROW_Y),
+            "ideal_box": _box_from_center(cx, cy, TARTAN_BOX_W, TARTAN_BOX_H),
             "expected": {"y10": y10, "u10": u10, "v10": v10},
             "sample": _SAMPLE.copy(),
         })
-    for col, (rid, name, y10, u10, v10) in enumerate(_TARTAN_BOT_EXPECTED):
+    for (rid, name, r, g, b), (cx, cy) in zip(_TARTAN_BOT_COLORS, _TARTAN_BOT_CENTERS):
+        y10, u10, v10 = rgb_norm_to_yuv10(r, g, b)
         regions.append({
             "id": rid,
             "name": name,
             "kind": "tartan_rect",
-            "ideal_box": _box(col, _TARTAN_BOT_ROW_Y),
+            "ideal_box": _box_from_center(cx, cy, TARTAN_BOX_W, TARTAN_BOX_H),
             "expected": {"y10": y10, "u10": u10, "v10": v10},
             "sample": _SAMPLE.copy(),
         })
@@ -141,7 +159,10 @@ def _build_gray_regions():
             "id": f"G{i+1}",
             "name": f"gray_step_{int((i + 1) * 20)}",
             "kind": "gray_step",
-            "ideal_box": _box(i, _GRAY_ROW_Y, GRAY_BOX_W, GRAY_BOX_H),
+            "ideal_box": _box_from_center(
+                _GRAY_CENTERS[i][0], _GRAY_CENTERS[i][1],
+                GRAY_BOX_W, GRAY_BOX_H,
+            ),
             "expected": {"y10": GRAY_IDEAL_Y10[i], "u10": 512, "v10": 512},
             "sample": _SAMPLE.copy(),
         }

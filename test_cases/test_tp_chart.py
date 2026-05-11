@@ -57,7 +57,25 @@ def test_tartan_regions_count_and_ids():
     ids = [r["id"] for r in tp_chart.TARTAN_REGIONS]
     assert len(ids) == 8
     assert set(ids) == {"YEL", "CYN", "BLU", "RED",
-                        "MAG_L", "GRN_L", "RED_L", "CYN_L"}
+                        "MAG", "GRN", "RED2", "CYN2"}
+
+
+def test_tartan_bottom_row_75_magenta_via_rec601():
+    # Bottom row is full 75% saturation, same Rec.601 math as the top row.
+    # Magenta RGB = (0.75, 0, 0.75)  ->  Y10 ~= 335.3, U10 ~= 734.7, V10 ~= 793.5
+    mag = next(r for r in tp_chart.TARTAN_REGIONS if r["id"] == "MAG")
+    e = mag["expected"]
+    assert approx(e["y10"], 335.3, 0.5)
+    assert approx(e["u10"], 734.7, 1.0)
+    assert approx(e["v10"], 793.5, 1.0)
+
+
+def test_tartan_red2_equals_top_red():
+    # The bottom-row RED2 has the same color as the top-row RED (intentional:
+    # creates a no-chroma-change column to contrast with adjacent transitions).
+    red = next(r for r in tp_chart.TARTAN_REGIONS if r["id"] == "RED")
+    red2 = next(r for r in tp_chart.TARTAN_REGIONS if r["id"] == "RED2")
+    assert red["expected"] == red2["expected"]
 
 
 def test_tartan_region_record_shape():
@@ -118,6 +136,8 @@ TESTS = [
     test_rgb_norm_to_yuv10_75_yellow,
     test_yuv10_to_rgb8_round_trip,
     test_tartan_regions_count_and_ids,
+    test_tartan_bottom_row_75_magenta_via_rec601,
+    test_tartan_red2_equals_top_red,
     test_tartan_region_record_shape,
     test_tartan_75_yellow_expected,
     test_gray_regions,

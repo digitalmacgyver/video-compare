@@ -42,7 +42,7 @@ _PRESETS: Dict[str, List[str]] = {
     "stage1-regions": [
         # 8 tartan + 4 gray-strip centres (Stage 1 measurement targets).
         "YEL", "CYN", "BLU", "RED",
-        "MAG_L", "GRN_L", "RED_L", "CYN_L",
+        "MAG", "GRN", "RED2", "CYN2",
         "G1", "G2", "G3", "G4",
     ],
     "stage1-landmarks": [
@@ -51,7 +51,7 @@ _PRESETS: Dict[str, List[str]] = {
     ],
     "stage1-all": [
         "YEL", "CYN", "BLU", "RED",
-        "MAG_L", "GRN_L", "RED_L", "CYN_L",
+        "MAG", "GRN", "RED2", "CYN2",
         "G1", "G2", "G3", "G4",
         "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8",
     ],
