@@ -450,11 +450,13 @@ def render_geometry_section(captures: List[Dict[str, Any]]) -> str:
         dvp = d.get("diameter_vs_picture_height")
         circle_fit_rms = d.get("circle_fit_rms")
         if aspect is not None:
+            dvp_str = f"{dvp:.3f}" if dvp is not None else "n/a"
+            rms_str = f"{circle_fit_rms:.2f}px" if circle_fit_rms is not None else "n/a"
             circle_html = (
                 f"<div class='small'>"
                 f"aspect_ratio_check={aspect:.4f} &nbsp; "
-                f"diameter_vs_picture_height={dvp:.3f} &nbsp; "
-                f"fit_rms={circle_fit_rms:.2f}px"
+                f"diameter_vs_picture_height={dvp_str} &nbsp; "
+                f"fit_rms={rms_str}"
                 f"</div>"
             )
         else:
