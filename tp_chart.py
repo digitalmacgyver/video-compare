@@ -178,26 +178,31 @@ GRAY_REGIONS = _build_gray_regions()
 # REGISTRATION LANDMARK CATALOG
 # =====================================================================
 #
-# Black grid intersections on grey background. Avoid the tartan/gray strip
-# (top-left 120x108 region), the chart border, and the burst columns.
-# 12x9 main grid implies intersections at multiples of 60 (x) and 54 (y).
-# We bias coverage to give a stable affine fit (anchors in upper, middle,
-# and lower thirds; columns spread across the picture).
+# Black grid intersections on the grey background. 12 anchors in the safe
+# interior of the chart (avoiding the tartan/gray strip on the upper-left,
+# the busy top of the chart, and the chart border).
+#
+# Diagnostic context: the Stage 1 catalog (8 anchors including L8 at
+# (360, 378) and L1-L3 at y=54) gave only 4 of 8 surviving RANSAC -- L8 has
+# no clean intersection, the top row was near the boundary triangles and
+# tartan and showed 1-4 px noise. The y∈{108..270} interior gives sub-px
+# residuals against a single-affine fit on the real captures.
 
 _LANDMARK_GRID = [
-    # (id, ideal_x, ideal_y) -- chosen on flat grey background, away from
-    # tartan/gray (x>=180 in upper rows) and burst regions (mid-x avoided).
-    ("L1", 180,  54),
-    ("L2", 300,  54),
-    ("L3", 540,  54),
-    ("L4", 180, 162),
-    ("L5", 540, 162),
-    ("L6",  60, 270),
-    ("L7", 660, 270),
-    ("L8", 360, 378),
+    # (id, ideal_x, ideal_y)
+    ("L1",  180, 108), ("L2",  360, 108), ("L3",  540, 108),
+    ("L4",  180, 162), ("L5",  420, 162), ("L6",  600, 162),
+    ("L7",  180, 216), ("L8",  360, 216), ("L9",  540, 216),
+    ("L10", 180, 270), ("L11", 420, 270), ("L12", 600, 270),
 ]
 
 GRID_LANDMARKS = [
-    {"id": rid, "ideal_x": x, "ideal_y": y, "search_window_px": 24}
+    {
+        "id": rid,
+        "kind": "grid_intersection",
+        "ideal_x": x,
+        "ideal_y": y,
+        "search_window_px": 24,
+    }
     for rid, x, y in _LANDMARK_GRID
 ]

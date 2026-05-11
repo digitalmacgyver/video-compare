@@ -113,20 +113,25 @@ def test_gray_regions():
 
 def test_grid_landmarks():
     lms = tp_chart.GRID_LANDMARKS
-    assert len(lms) == 8
+    assert len(lms) == 12, f"expected 12 anchors, got {len(lms)}"
+    ids = [lm["id"] for lm in lms]
+    assert ids == [f"L{i+1}" for i in range(12)], ids
     for lm in lms:
-        assert "id" in lm
+        assert lm["kind"] == "grid_intersection"
         assert 0 < lm["ideal_x"] < 720
         assert 0 < lm["ideal_y"] < 486
         assert lm["search_window_px"] >= 16
 
 
 def test_grid_landmark_distribution():
-    # At least one landmark in each vertical third of the picture
-    ys = [lm["ideal_y"] for lm in tp_chart.GRID_LANDMARKS]
-    assert any(y < 162 for y in ys), "need landmark in upper third"
-    assert any(162 <= y < 324 for y in ys), "need landmark in middle third"
-    assert any(y >= 324 for y in ys), "need landmark in lower third"
+    # All anchors lie in the safe interior y ∈ [108, 270] (avoiding the busy
+    # top of the chart and the lower-third uncertainty around the old L8).
+    for lm in tp_chart.GRID_LANDMARKS:
+        assert 108 <= lm["ideal_y"] <= 270, lm
+        assert 180 <= lm["ideal_x"] <= 600, lm
+    # 3 anchors per y-row for x-spread, 4 distinct y-rows.
+    ys = sorted({lm["ideal_y"] for lm in tp_chart.GRID_LANDMARKS})
+    assert ys == [108, 162, 216, 270]
 
 
 TESTS = [
