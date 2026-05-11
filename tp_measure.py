@@ -261,6 +261,108 @@ def fit_gray_ramp(grays: list) -> Dict[str, Any]:
     }
 
 
+def _ser_pt(p):
+    if p is None:
+        return None
+    return [float(p[0]), float(p[1])]
+
+
+def _build_geometry_block(reg_full):
+    """Convert the in-memory geometry from register_with_geometry into the
+    JSON shape documented in the Stage 2 design spec."""
+    geom = reg_full.get("geometry")
+    if geom is None:
+        return None
+    initial = reg_full["initial"]
+    final = reg_full["final"]
+
+    tris_out = {}
+    for tid, t in geom["fiducials"]["triangles"].items():
+        if t is None:
+            tris_out[tid] = None
+            continue
+        tris_out[tid] = {
+            "back_corner_1": _ser_pt(t["back_corner_1"]),
+            "back_corner_2": _ser_pt(t["back_corner_2"]),
+            "back_midpoint": _ser_pt(t["back_midpoint"]),
+            "apex_inferred": _ser_pt(t["apex_inferred"]),
+            "apex_detected": _ser_pt(t["apex_detected"]),
+            "confidence":    float(t["confidence"]),
+            "failure_reason": None,
+        }
+    cross_out = None
+    rc = geom["fiducials"]["cross"]
+    if rc is not None:
+        cross_out = {
+            "center": [float(rc["x"]), float(rc["y"])],
+            "h_arm_len_px": float(rc["h_arm_len_px"]),
+            "v_arm_len_px": float(rc["v_arm_len_px"]),
+            "confidence":   float(rc["confidence"]),
+        }
+    circle_out = None
+    bc = geom["fiducials"]["circle"]
+    if bc is not None:
+        circle_out = {
+            "center":      [float(bc["cx"]), float(bc["cy"])],
+            "rx":          float(bc["rx"]),
+            "ry":          float(bc["ry"]),
+            "rotation_deg": float(bc["rotation_deg"]),
+            "fit_rms":     float(bc["fit_rms"]),
+            "confidence":  float(bc["confidence"]),
+        }
+
+    derived = geom["derived"]
+    derived_out = {}
+    for key in ("active_picture_box", "picture_extent_px",
+                "picture_offset_from_ideal", "corner_skew_px",
+                "cross_offset_from_ideal",
+                "aperture_symmetry", "aspect_ratio_check",
+                "diameter_vs_picture_height", "circle_fit_rms"):
+        derived_out[key] = derived.get(key)
+    if derived.get("arrow_tip_coords"):
+        derived_out["arrow_tip_coords"] = {
+            k: _ser_pt(v) for k, v in derived["arrow_tip_coords"].items()
+        }
+    else:
+        derived_out["arrow_tip_coords"] = None
+    derived_out["clip_detected"] = derived.get("clip_detected")
+
+    quality_flag, quality_reason = _compute_geometry_quality(geom, final)
+
+    return {
+        "fiducials": {"triangles": tris_out, "cross": cross_out, "circle": circle_out},
+        "derived":   derived_out,
+        "registration_refit": {
+            "inlier_count_initial": int(initial.get("inliers", 0)),
+            "inlier_count_final":   int(final.get("inliers", 0)),
+            "final_residuals_px":   final["residuals_px"],
+            "anchors_added":        reg_full.get("anchors_added", []),
+        },
+        "quality_flag":   quality_flag,
+        "quality_reason": quality_reason,
+    }
+
+
+def _compute_geometry_quality(geom, final):
+    tris = geom["fiducials"]["triangles"]
+    detected_count = sum(1 for t in tris.values() if t is not None)
+    cross_ok = geom["fiducials"]["cross"] is not None
+    circle_fit_rms = (geom["fiducials"]["circle"] or {}).get("fit_rms")
+    mean_res = final["residuals_px"]["mean"]
+
+    if detected_count < 2 and not cross_ok:
+        return "failed", "cross missing and <2 triangles detected"
+    if detected_count < 3 or not cross_ok:
+        return "partial", f"only {detected_count}/4 triangles, cross={cross_ok}"
+    if (circle_fit_rms is not None and circle_fit_rms < 2.0
+            and mean_res < 1.0):
+        return "ok", None
+    if ((circle_fit_rms is None or circle_fit_rms < 5.0)
+            and mean_res < 2.0):
+        return "warn", "residuals or circle_fit_rms exceed ok threshold"
+    return "failed", "residuals or circle fit too poor"
+
+
 def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
     Y, U, V, meta = extract_frame(capture_path, frame_index)
     Y_p, U_p, V_p, padding = pad_to_486(Y, U, V)
@@ -274,13 +376,14 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
             file=sys.stderr,
         )
 
-    reg = tp_register.register(Y_p)
+    reg_full = tp_register.register_with_geometry(Y_p)
+    reg = reg_full["final"]
     meta["registration"] = {
         "affine": reg["affine_matrix"].tolist() if reg["affine_matrix"] is not None else None,
         "residuals_px": reg["residuals_px"],
         "inliers": reg["inliers"],
         "total": reg["total"],
-        "landmarks_used": reg["landmarks_used"],
+        "landmarks_used": reg_full["initial"].get("landmarks_used", []),
         "quality_flag": reg["quality_flag"],
         "quality_reason": reg.get("quality_reason"),
     }
@@ -294,7 +397,6 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
     M = reg["affine_matrix"]
     tartan = [sample_region(Y_p, U_p, V_p, r, M) for r in tp_chart.TARTAN_REGIONS]
     grays_raw = [sample_region(Y_p, U_p, V_p, r, M) for r in tp_chart.GRAY_REGIONS]
-    # Reshape gray records to the schema in the spec (flat ideal_y10 + delta_y10).
     grays = []
     for r, raw in zip(tp_chart.GRAY_REGIONS, grays_raw):
         grays.append({
@@ -314,11 +416,14 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
 
     luma_scale = fit_gray_ramp(grays)
 
+    geometry_block = _build_geometry_block(reg_full)
+
     return {
         "_meta": meta,
         "tartan": tartan,
         "grays": grays,
         "luma_scale": luma_scale,
+        "geometry": geometry_block,
     }
 
 

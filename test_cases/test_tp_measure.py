@@ -228,11 +228,43 @@ def test_measure_end_to_end_dvd_padding(tmp_dir):
     assert data["_meta"]["registration"]["quality_flag"] in ("ok", "warn")
 
 
+def test_measure_end_to_end_includes_geometry_block(tmp_dir):
+    capture_path = os.path.join(tmp_dir, "ideal.mov")
+    json_path = os.path.join(tmp_dir, "out.json")
+    _write_synthesized_prores(capture_path, 720, 486, frames=5)
+    subprocess.run(
+        ["python", "tp_measure.py", capture_path,
+         "--frame", "0", "--output", json_path],
+        check=True, cwd=PROJECT_ROOT,
+    )
+    with open(json_path) as f:
+        data = json.load(f)
+    assert "geometry" in data
+    g = data["geometry"]
+    assert "fiducials" in g
+    assert "derived" in g
+    assert set(g["fiducials"]["triangles"].keys()) == {"TL", "TR", "BL", "BR"}
+    assert g["fiducials"]["cross"] is not None
+    assert g["fiducials"]["circle"] is not None
+    assert g["derived"]["active_picture_box"] is not None
+    # On the synthesized ideal, no clipping detected.
+    for tid in ("TL", "TR", "BL", "BR"):
+        assert g["derived"]["clip_detected"][tid]["apex_visible"] is True
+    # Quality flag present.
+    assert g["quality_flag"] in ("ok", "warn", "partial", "failed")
+    # Refit benefit reporting.
+    rrf = g["registration_refit"]
+    assert "inlier_count_initial" in rrf
+    assert "inlier_count_final" in rrf
+    assert rrf["inlier_count_final"] >= rrf["inlier_count_initial"]
+
+
 TESTS_TMPDIR = [
     test_extract_frame_yuv422p10le_720x486,
     test_extract_pad_720x480_dvd_like,
     test_measure_end_to_end_zero_deltas,
     test_measure_end_to_end_dvd_padding,
+    test_measure_end_to_end_includes_geometry_block,
 ]
 TESTS_NO_TMPDIR = [
     test_pad_to_486_centers_grey,
