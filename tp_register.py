@@ -9,12 +9,7 @@ import numpy as np
 import tp_chart
 
 
-def detect_landmark(
-    Y: np.ndarray,
-    ideal_x: int,
-    ideal_y: int,
-    search_window_px: int,
-) -> Optional[Tuple[float, float, float]]:
+def _grid_intersection_impl(Y, ideal_x, ideal_y, search_window_px):
     """Find a grid-intersection (a black '+' on grey) inside a search window.
 
     Approach:
@@ -43,20 +38,13 @@ def detect_landmark(
     if win.size == 0:
         return None
 
-    threshold = 0.3 * tp_chart.GREY_BACKGROUND_Y10  # ~150
+    threshold = 0.3 * tp_chart.GREY_BACKGROUND_Y10
     dark_mask = win < threshold
     dark_count = int(dark_mask.sum())
     if dark_count < 4:
         return None
     confidence = dark_count / win.size
 
-    # Intersection detection via column/row projections.
-    # The vertical grid line appears as a spike in the column projection
-    # (many dark pixels per column), while non-vertical columns have only the
-    # horizontal line's 3 dark pixels. Taking columns above the median isolates
-    # the vertical bar; similarly for rows and the horizontal bar. This gives
-    # the sub-pixel intersection position even when the cross is not centred in
-    # the search window (e.g. after a global frame shift).
     col_proj = dark_mask.sum(axis=0).astype(np.float32)
     row_proj = dark_mask.sum(axis=1).astype(np.float32)
 
@@ -74,6 +62,34 @@ def detect_landmark(
     cy = float((row_proj[row_high] * row_idxs).sum() / row_proj[row_high].sum())
 
     return (x0 + cx, y0 + cy, confidence)
+
+
+def _detect_grid_intersection(Y, fid):
+    """Grid-intersection detector. fid carries ideal_x, ideal_y,
+    search_window_px."""
+    return _grid_intersection_impl(
+        Y, fid["ideal_x"], fid["ideal_y"], fid["search_window_px"]
+    )
+
+
+def detect_fiducial(Y, fid):
+    """Dispatch by fid['kind'] to the right detector implementation.
+    Returns a detector-specific value (kind-dependent shape) or None."""
+    kind = fid["kind"]
+    if kind == "grid_intersection":
+        return _detect_grid_intersection(Y, fid)
+    # Stage 2 detectors are added in subsequent tasks.
+    raise ValueError(f"unknown fiducial kind: {kind}")
+
+
+def detect_landmark(
+    Y: np.ndarray,
+    ideal_x: int,
+    ideal_y: int,
+    search_window_px: int,
+) -> Optional[Tuple[float, float, float]]:
+    """Backward-compat alias for _grid_intersection_impl."""
+    return _grid_intersection_impl(Y, ideal_x, ideal_y, search_window_px)
 
 
 def fit_affine(
@@ -163,7 +179,7 @@ def register(Y: np.ndarray) -> Dict[str, Any]:
     ideal: List[Tuple[float, float]] = []
     detected_lm_ids: List[str] = []
     for lm in tp_chart.GRID_LANDMARKS:
-        det = detect_landmark(Y, lm["ideal_x"], lm["ideal_y"], lm["search_window_px"])
+        det = detect_fiducial(Y, lm)
         if det is None:
             continue
         dx, dy, _ = det

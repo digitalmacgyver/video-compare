@@ -8,6 +8,7 @@ import numpy as np
 import tp_chart
 import tp_synthesize
 import tp_register
+import tp_fixtures
 
 
 def approx(a, b, tol):
@@ -108,6 +109,28 @@ def test_register_quality_flag_failure_when_no_landmarks_detect():
     assert result["affine_matrix"] is None
 
 
+def test_detect_fiducial_dispatches_grid_intersection():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth()
+    lm = tp_chart.GRID_LANDMARKS[0]
+    det = tp_register.detect_fiducial(Y, lm)
+    assert det is not None
+    # grid_intersection contract: returns (x, y, confidence)
+    x, y, conf = det
+    truth_x, truth_y = gt["grid_intersections"][lm["id"]]
+    assert abs(x - truth_x) < 0.5
+    assert abs(y - truth_y) < 0.5
+
+
+def test_detect_fiducial_unknown_kind_raises():
+    Y, _, _, _ = tp_fixtures.synthesize_with_ground_truth()
+    raised = False
+    try:
+        tp_register.detect_fiducial(Y, {"id": "?", "kind": "no_such_thing"})
+    except ValueError:
+        raised = True
+    assert raised
+
+
 TESTS = [
     test_detect_landmark_on_synthesized_ideal,
     test_detect_landmark_off_grid_returns_none,
@@ -117,6 +140,8 @@ TESTS = [
     test_register_identity_on_synthesized_ideal,
     test_register_recovers_translation,
     test_register_quality_flag_failure_when_no_landmarks_detect,
+    test_detect_fiducial_dispatches_grid_intersection,
+    test_detect_fiducial_unknown_kind_raises,
 ]
 
 
