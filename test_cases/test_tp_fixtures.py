@@ -106,12 +106,38 @@ def test_fixture_blur_softens_edges_but_preserves_truth():
     assert Y[gy, gx] < tp_chart.GREY_BACKGROUND_Y10 - 50
 
 
+def test_fixture_clip_top_invalidates_TL_TR_apexes():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth(clip_top=5)
+    # Top 5 rows zeroed.
+    assert (Y[:5, :] == 0).all()
+    # TL apex was at y=3 -- now in the clipped region.
+    assert gt["triangles"]["TL"]["apex_visible"] is False
+    assert gt["triangles"]["TR"]["apex_visible"] is False
+    # Back corners at y=30 still visible.
+    tl_orig_bc1 = tp_chart.BOUNDARY_TRIANGLES[0]["ideal_back_corner_1"]
+    assert gt["triangles"]["TL"]["back_corner_1"] == tl_orig_bc1
+    # BL/BR unaffected.
+    assert gt["triangles"]["BL"]["apex_visible"] is True
+    assert gt["triangles"]["BR"]["apex_visible"] is True
+
+
+def test_fixture_clip_bottom_invalidates_BL_BR_apexes():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth(clip_bottom=5)
+    assert (Y[-5:, :] == 0).all()
+    # BL apex was at y=482 -- now in the clipped region.
+    assert gt["triangles"]["BL"]["apex_visible"] is False
+    assert gt["triangles"]["BR"]["apex_visible"] is False
+    assert gt["triangles"]["TL"]["apex_visible"] is True
+
+
 TESTS = [
     test_fixture_identity_ground_truth_matches_chart_catalog,
     test_fixture_shift_updates_ground_truth_and_frame,
     test_fixture_rotation_updates_ground_truth_positions,
     test_fixture_noise_only_changes_pixel_values,
     test_fixture_blur_softens_edges_but_preserves_truth,
+    test_fixture_clip_top_invalidates_TL_TR_apexes,
+    test_fixture_clip_bottom_invalidates_BL_BR_apexes,
 ]
 
 

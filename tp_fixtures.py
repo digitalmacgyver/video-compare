@@ -161,6 +161,48 @@ def _blur_y(Y, sigma):
     return cv2.GaussianBlur(Y, (k, k), sigma, borderType=cv2.BORDER_REPLICATE)
 
 
+def _apply_clip_to_planes(Y, U, V, clip_top, clip_bottom, clip_left, clip_right):
+    h, w = Y.shape
+    if clip_top > 0:
+        Y[:clip_top, :] = 0
+        U[:clip_top, :] = 0
+        V[:clip_top, :] = 0
+    if clip_bottom > 0:
+        Y[h - clip_bottom:, :] = 0
+        U[h - clip_bottom:, :] = 0
+        V[h - clip_bottom:, :] = 0
+    if clip_left > 0:
+        Y[:, :clip_left] = 0
+        U[:, :clip_left // 2] = 0
+        V[:, :clip_left // 2] = 0
+    if clip_right > 0:
+        Y[:, w - clip_right:] = 0
+        U[:, (w - clip_right) // 2:] = 0
+        V[:, (w - clip_right) // 2:] = 0
+    return Y, U, V
+
+
+def _apply_clip_to_ground_truth(gt, clip_top, clip_bottom, clip_left, clip_right,
+                                width, height):
+    out = dict(gt)
+    new_tris = {}
+    for tid, t in gt["triangles"].items():
+        ax, ay = t["apex"]
+        visible = t["apex_visible"]
+        if visible:
+            if clip_top > 0 and ay < clip_top:
+                visible = False
+            elif clip_bottom > 0 and ay >= height - clip_bottom:
+                visible = False
+            elif clip_left > 0 and ax < clip_left:
+                visible = False
+            elif clip_right > 0 and ax >= width - clip_right:
+                visible = False
+        new_tris[tid] = dict(t, apex_visible=visible)
+    out["triangles"] = new_tris
+    return out
+
+
 def synthesize_with_ground_truth(
     width: int = 720,
     height: int = 486,
@@ -168,6 +210,10 @@ def synthesize_with_ground_truth(
     rotation_deg: float = 0.0,
     noise_sigma: float = 0.0,
     blur_sigma: float = 0.0,
+    clip_top: int = 0,
+    clip_bottom: int = 0,
+    clip_left: int = 0,
+    clip_right: int = 0,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
     Y, U, V = tp_synthesize.synthesize(width, height)
     gt = _build_identity_ground_truth()
@@ -183,4 +229,9 @@ def synthesize_with_ground_truth(
         Y = _blur_y(Y, blur_sigma)
     if noise_sigma > 0:
         Y = _add_noise(Y, noise_sigma)
+    if clip_top or clip_bottom or clip_left or clip_right:
+        Y, U, V = _apply_clip_to_planes(Y, U, V, clip_top, clip_bottom,
+                                        clip_left, clip_right)
+        gt = _apply_clip_to_ground_truth(gt, clip_top, clip_bottom,
+                                         clip_left, clip_right, width, height)
     return Y, U, V, gt
