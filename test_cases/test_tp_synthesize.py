@@ -192,6 +192,30 @@ def test_synthesize_renders_registration_cross():
     assert Y[cy - 3, cx + 5] == tp_chart.BLACK_Y10
 
 
+def test_synthesize_renders_black_circle_dark_ring_at_expected_radius():
+    Y, _, _ = tp_synthesize.synthesize(720, 486)
+    bc = tp_chart.BLACK_CIRCLE
+    cx, cy = bc["ideal_cx"], bc["ideal_cy"]
+    r = bc["expected_radius_px"]
+    # Sample 32 angles around the circle at radius r; most ring pixels should
+    # be dark (Y10 close to BLACK_Y10). Antialiasing may produce intermediate
+    # values right at edges, so use a tolerance.
+    import math
+    dark_count = 0
+    sampled = 0
+    for i in range(32):
+        theta = 2 * math.pi * i / 32
+        x = int(round(cx + r * math.cos(theta)))
+        y = int(round(cy + r * math.sin(theta)))
+        if 0 <= x < 720 and 0 <= y < 486:
+            sampled += 1
+            if Y[y, x] < tp_chart.GREY_BACKGROUND_Y10 - 100:
+                dark_count += 1
+    assert sampled >= 24, f"only {sampled} ring samples landed in-frame"
+    assert dark_count >= int(0.75 * sampled), \
+        f"only {dark_count}/{sampled} ring samples are dark"
+
+
 import tempfile
 import shutil
 
@@ -206,6 +230,7 @@ TESTS_NO_TMPDIR = [
     test_synthesize_back_corners_of_each_triangle_are_black,
     test_synthesize_old_placeholder_cell_no_longer_triangle,
     test_synthesize_renders_registration_cross,
+    test_synthesize_renders_black_circle_dark_ring_at_expected_radius,
     test_fill_box_rejects_odd_x,
     test_fill_box_rejects_odd_w,
 ]

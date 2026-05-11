@@ -114,6 +114,20 @@ def _draw_boundary_triangles(Y: np.ndarray) -> None:
         _fill_triangle_y(Y, bc1, bc2, apex)
 
 
+def _draw_black_circle(Y: np.ndarray) -> None:
+    """Render the black circle ring from tp_chart.BLACK_CIRCLE."""
+    import cv2
+    bc = tp_chart.BLACK_CIRCLE
+    cv2.circle(
+        Y,
+        center=(bc["ideal_cx"], bc["ideal_cy"]),
+        radius=bc["expected_radius_px"],
+        color=int(tp_chart.BLACK_Y10),
+        thickness=bc["ring_thickness_px"],
+        lineType=cv2.LINE_AA,
+    )
+
+
 def _draw_registration_cross(Y: np.ndarray) -> None:
     """Render the registration cross from tp_chart.REGISTRATION_CROSS.
 
@@ -144,6 +158,7 @@ def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndar
     _draw_tartan(Y, U, V)
     _draw_gray_strip(Y, U, V)
     _draw_boundary_triangles(Y)
+    _draw_black_circle(Y)
     _draw_registration_cross(Y)
     return Y, U, V
 

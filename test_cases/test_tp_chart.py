@@ -136,9 +136,10 @@ def test_grid_landmark_distribution():
     import collections
     row_counts = collections.Counter(lm["ideal_y"] for lm in tp_chart.GRID_LANDMARKS)
     assert all(count == 3 for count in row_counts.values()), dict(row_counts)
-    # x-values must avoid the burst-column region; exact set is intentional.
+    # All x-values are on the main 60-px grid and avoid the black circle arc
+    # (r=243, center=(360,243)): each anchor has >= 29 px clearance from arc.
     xs = sorted({lm["ideal_x"] for lm in tp_chart.GRID_LANDMARKS})
-    assert xs == [180, 360, 420, 540, 600], xs
+    assert xs == [180, 240, 360, 420, 480, 540], xs
 
 
 def test_ideal_picture_box():

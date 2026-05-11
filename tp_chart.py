@@ -210,11 +210,14 @@ IDEAL_PICTURE_BOX_CORNERS = [
 # residuals against a single-affine fit on the real captures.
 
 _LANDMARK_GRID = [
-    # (id, ideal_x, ideal_y)
-    ("L1",  180, 108), ("L2",  360, 108), ("L3",  540, 108),
-    ("L4",  180, 162), ("L5",  420, 162), ("L6",  600, 162),
+    # (id, ideal_x, ideal_y) — 12 anchors, 3 per y-row, all ≥ 29 px clear of
+    # the black circle arc (r=243). Original corners at x=180/540 on y=108 and
+    # x=600 on y=162/270 fell within the 24-px search window of the arc and
+    # were replaced with x=240/480 (y=108), x=480 (y=162), x=540 (y=270).
+    ("L1",  240, 108), ("L2",  360, 108), ("L3",  480, 108),
+    ("L4",  180, 162), ("L5",  420, 162), ("L6",  480, 162),
     ("L7",  180, 216), ("L8",  360, 216), ("L9",  540, 216),
-    ("L10", 180, 270), ("L11", 420, 270), ("L12", 600, 270),
+    ("L10", 180, 270), ("L11", 420, 270), ("L12", 540, 270),
 ]
 
 GRID_LANDMARKS = [
