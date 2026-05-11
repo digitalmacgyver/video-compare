@@ -131,6 +131,65 @@ def test_detect_fiducial_unknown_kind_raises():
     assert raised
 
 
+def test_detect_boundary_triangle_identity():
+    """Identity variant: back corners within 0.5 px; apex within 1.0 px."""
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth()
+    tri = next(t for t in tp_chart.BOUNDARY_TRIANGLES if t["id"] == "TL")
+    result = tp_register.detect_fiducial(Y, tri)
+    assert result is not None
+    truth = gt["triangles"]["TL"]
+    bc1_x, bc1_y = result["back_corner_1"]
+    assert abs(bc1_x - truth["back_corner_1"][0]) < 0.5
+    assert abs(bc1_y - truth["back_corner_1"][1]) < 0.5
+    bc2_x, bc2_y = result["back_corner_2"]
+    assert abs(bc2_x - truth["back_corner_2"][0]) < 0.5
+    assert abs(bc2_y - truth["back_corner_2"][1]) < 0.5
+    apex_x, apex_y = result["apex_inferred"]
+    assert abs(apex_x - truth["apex"][0]) < 1.0
+    assert abs(apex_y - truth["apex"][1]) < 1.0
+
+
+def test_detect_boundary_triangle_noise_sigma_20():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth(noise_sigma=20.0)
+    tri = next(t for t in tp_chart.BOUNDARY_TRIANGLES if t["id"] == "TL")
+    result = tp_register.detect_fiducial(Y, tri)
+    assert result is not None
+    truth = gt["triangles"]["TL"]
+    for key in ("back_corner_1", "back_corner_2"):
+        dx = result[key][0] - truth[key][0]
+        dy = result[key][1] - truth[key][1]
+        assert (dx ** 2 + dy ** 2) ** 0.5 < 1.0, f"{key} err > 1.0 px"
+
+
+def test_detect_boundary_triangle_blur_sigma_1_5():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth(blur_sigma=1.5)
+    tri = next(t for t in tp_chart.BOUNDARY_TRIANGLES if t["id"] == "TL")
+    result = tp_register.detect_fiducial(Y, tri)
+    assert result is not None
+    truth = gt["triangles"]["TL"]
+    for key in ("back_corner_1", "back_corner_2"):
+        dx = result[key][0] - truth[key][0]
+        dy = result[key][1] - truth[key][1]
+        assert (dx ** 2 + dy ** 2) ** 0.5 < 1.5, f"{key} err > 1.5 px"
+
+
+def test_detect_boundary_triangle_clip_top_apex_inferred_only():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth(clip_top=5)
+    tri = next(t for t in tp_chart.BOUNDARY_TRIANGLES if t["id"] == "TL")
+    result = tp_register.detect_fiducial(Y, tri)
+    assert result is not None
+    # Back corners still detected to threshold.
+    truth = gt["triangles"]["TL"]
+    for key in ("back_corner_1", "back_corner_2"):
+        dx = result[key][0] - truth[key][0]
+        dy = result[key][1] - truth[key][1]
+        assert (dx ** 2 + dy ** 2) ** 0.5 < 0.5
+    # apex_detected is None (clipped), apex_inferred is computed from
+    # back_midpoint + chart offset.
+    assert result["apex_detected"] is None
+    assert result["apex_inferred"] is not None
+
+
 TESTS = [
     test_detect_landmark_on_synthesized_ideal,
     test_detect_landmark_off_grid_returns_none,
@@ -142,6 +201,10 @@ TESTS = [
     test_register_quality_flag_failure_when_no_landmarks_detect,
     test_detect_fiducial_dispatches_grid_intersection,
     test_detect_fiducial_unknown_kind_raises,
+    test_detect_boundary_triangle_identity,
+    test_detect_boundary_triangle_noise_sigma_20,
+    test_detect_boundary_triangle_blur_sigma_1_5,
+    test_detect_boundary_triangle_clip_top_apex_inferred_only,
 ]
 
 

@@ -72,13 +72,145 @@ def _detect_grid_intersection(Y, fid):
     )
 
 
+def _detect_boundary_triangle(Y, fid):
+    """Detect a boundary triangle by its back corners.
+
+    fid carries: ideal_back_corner_1, ideal_back_corner_2,
+                 ideal_back_midpoint, ideal_apex, orientation,
+                 search_window_px.
+
+    Algorithm:
+      1. Crop a narrow vertical band (ideal_back_y +/- 4 rows) x full
+         horizontal window centered on ideal_back_midpoint.
+      2. Threshold dark pixels: Y10 < 0.3 * GREY_BACKGROUND_Y10.
+      3. Reject rows with fewer than BASE_HALF - 2 dark pixels (grid lines
+         give ~3 px; the triangle back edge gives ~20 px).
+      4. Find the back edge row based on orientation:
+           apex_up   -> bottommost qualifying row
+           apex_down -> topmost qualifying row
+      5. Compute center_x as a darkness-weighted centroid across all
+         qualifying rows. The triangle is symmetric about bm_x.
+      6. back_corner_1 = (center_x - BASE_HALF, back_y)
+         back_corner_2 = (center_x + BASE_HALF, back_y)
+      7. back_midpoint = (center_x, back_y)
+         apex_inferred = back_midpoint + (ideal_apex - ideal_back_midpoint)
+      8. apex_detected: search a small window around apex_inferred; set to
+         None if the nearest dark pixel is more than 2 rows away from the
+         chart-spec distance.
+    """
+    h, w = Y.shape
+    bm_x, bm_y = fid["ideal_back_midpoint"]
+    ideal_apex = fid["ideal_apex"]
+    ideal_bm = fid["ideal_back_midpoint"]
+    offset = (ideal_apex[0] - ideal_bm[0], ideal_apex[1] - ideal_bm[1])
+    # Half-width of the back edge from chart geometry.
+    base_half = (fid["ideal_back_corner_2"][0] - fid["ideal_back_corner_1"][0]) / 2.0
+    # Minimum dark pixels per row to qualify as a triangle row (not a grid line).
+    min_dark_for_back = max(3, int(base_half) - 2)
+
+    orient = fid["orientation"]
+    half_x = fid["search_window_px"] // 2
+    x0 = max(0, int(bm_x) - half_x)
+    x1 = min(w, int(bm_x) + half_x)
+
+    # Narrow vertical band around the ideal back edge.
+    back_y_margin = 4
+    y_lo = max(0, int(bm_y) - back_y_margin)
+    y_hi = min(h, int(bm_y) + back_y_margin + 1)
+    band = Y[y_lo:y_hi, x0:x1].astype(np.float32)
+    if band.size == 0:
+        return None
+
+    threshold = 0.3 * tp_chart.GREY_BACKGROUND_Y10
+    darkness = np.maximum(0.0, threshold - band)
+    dark_row_counts = np.array(
+        [int((darkness[r, :] > 0).sum()) for r in range(darkness.shape[0])]
+    )
+
+    # Find qualifying (wide-dark) rows — these are triangle rows, not grid lines.
+    wide_rows = np.where(dark_row_counts >= min_dark_for_back)[0]
+    if len(wide_rows) == 0:
+        return None
+
+    confidence = min(1.0, float(dark_row_counts[wide_rows].sum()) / band.size)
+
+    # Back row: orientation determines which extreme is the back edge.
+    if orient == "apex_up":
+        back_local_r = int(wide_rows.max())    # bottommost wide row
+    elif orient == "apex_down":
+        back_local_r = int(wide_rows.min())    # topmost wide row
+    else:
+        raise ValueError(f"unsupported orientation: {orient}")
+    abs_back_y = float(y_lo + back_local_r)
+
+    # Darkness-weighted centroid of x across all qualifying rows.
+    total_weight = 0.0
+    weighted_cx = 0.0
+    for r in wide_rows:
+        row_dark = darkness[r, :]
+        rw = float(row_dark.sum())
+        if rw == 0.0:
+            continue
+        xs = np.arange(row_dark.shape[0], dtype=np.float32)
+        cx = float((row_dark * xs).sum() / rw)
+        weighted_cx += rw * (x0 + cx)
+        total_weight += rw
+    if total_weight == 0.0:
+        return None
+    center_x = weighted_cx / total_weight
+
+    bc1 = (center_x - base_half, abs_back_y)
+    bc2 = (center_x + base_half, abs_back_y)
+    back_midpoint = (center_x, abs_back_y)
+    apex_inferred = (back_midpoint[0] + offset[0],
+                     back_midpoint[1] + offset[1])
+
+    # Apex detection: search a small window centered on apex_inferred.
+    apex_margin = 3
+    ai_y = apex_inferred[1]
+    ay_lo = max(0, int(ai_y) - apex_margin)
+    ay_hi = min(h, int(ai_y) + apex_margin + 1)
+    apex_win = Y[ay_lo:ay_hi, x0:x1].astype(np.float32)
+    apex_dark_mask = apex_win < threshold
+    apex_ys, apex_xs = np.where(apex_dark_mask)
+
+    chart_spec_dist = abs(offset[1])
+    apex_detected = None
+    if len(apex_ys) > 0:
+        if orient == "apex_up":
+            cand_r = int(apex_ys.min())    # topmost dark pixel
+        else:
+            cand_r = int(apex_ys.max())    # bottommost dark pixel
+        abs_cand_y = float(ay_lo + cand_r)
+        observed_dist = abs(abs_cand_y - abs_back_y)
+        if abs(observed_dist - chart_spec_dist) <= 2:
+            mask_r = apex_ys == cand_r
+            xs_at_r = apex_xs[mask_r]
+            # Require apex dark pixels to be near center_x.
+            local_cx = center_x - x0
+            near_center = xs_at_r[np.abs(xs_at_r - local_cx) <= base_half + 2]
+            if len(near_center) > 0:
+                apex_lx = float(near_center.mean())
+                apex_detected = (x0 + apex_lx, abs_cand_y)
+
+    return {
+        "back_corner_1": bc1,
+        "back_corner_2": bc2,
+        "back_midpoint": back_midpoint,
+        "apex_inferred": apex_inferred,
+        "apex_detected": apex_detected,
+        "confidence": confidence,
+    }
+
+
 def detect_fiducial(Y, fid):
     """Dispatch by fid['kind'] to the right detector implementation.
     Returns a detector-specific value (kind-dependent shape) or None."""
     kind = fid["kind"]
     if kind == "grid_intersection":
         return _detect_grid_intersection(Y, fid)
-    # Stage 2 detectors are added in subsequent tasks.
+    if kind == "boundary_triangle":
+        return _detect_boundary_triangle(Y, fid)
     raise ValueError(f"unknown fiducial kind: {kind}")
 
 
