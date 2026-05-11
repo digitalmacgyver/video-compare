@@ -221,6 +221,33 @@ def test_detect_registration_cross_noise_sigma_20():
     assert err < 0.6, f"noise σ=20 produced err {err:.2f} px > 0.6 px threshold"
 
 
+def test_detect_black_circle_identity():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth()
+    bc = tp_chart.BLACK_CIRCLE
+    result = tp_register.detect_fiducial(Y, bc)
+    assert result is not None
+    tcx, tcy = gt["circle"]["center"]
+    assert abs(result["cx"] - tcx) < 0.5
+    assert abs(result["cy"] - tcy) < 0.5
+    truth_r = gt["circle"]["radius"]
+    assert abs(result["rx"] - truth_r) < 0.5
+    assert abs(result["ry"] - truth_r) < 0.5
+    assert result["fit_rms"] < 1.0
+
+
+def test_detect_black_circle_noise_sigma_20():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth(noise_sigma=20.0)
+    bc = tp_chart.BLACK_CIRCLE
+    result = tp_register.detect_fiducial(Y, bc)
+    assert result is not None
+    tcx, tcy = gt["circle"]["center"]
+    err = ((result["cx"] - tcx) ** 2 + (result["cy"] - tcy) ** 2) ** 0.5
+    assert err < 1.0
+    truth_r = gt["circle"]["radius"]
+    assert abs(result["rx"] - truth_r) < 1.5
+    assert abs(result["ry"] - truth_r) < 1.5
+
+
 TESTS = [
     test_detect_landmark_on_synthesized_ideal,
     test_detect_landmark_off_grid_returns_none,
@@ -239,6 +266,8 @@ TESTS = [
     test_detect_registration_cross_identity,
     test_detect_registration_cross_subpixel_shift,
     test_detect_registration_cross_noise_sigma_20,
+    test_detect_black_circle_identity,
+    test_detect_black_circle_noise_sigma_20,
 ]
 
 

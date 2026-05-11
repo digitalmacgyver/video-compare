@@ -305,6 +305,72 @@ def _detect_registration_cross(Y, fid):
     }
 
 
+def _detect_black_circle(Y, fid):
+    import cv2
+    h, w = Y.shape
+    cx_ideal = fid["ideal_cx"]
+    cy_ideal = fid["ideal_cy"]
+    r_ideal = fid["expected_radius_px"]
+    band = fid["search_band_px"]
+    # Annular mask: broad band used to catch all ring pixels.
+    yy, xx = np.mgrid[0:h, 0:w]
+    dist = np.sqrt((xx - cx_ideal) ** 2 + (yy - cy_ideal) ** 2)
+    annulus = (dist >= (r_ideal - band)) & (dist <= (r_ideal + band))
+    threshold = 0.3 * tp_chart.GREY_BACKGROUND_Y10
+    dark = (Y < threshold) & annulus
+    dark_count = int(dark.sum())
+    if dark_count < 100:
+        return None
+    ys, xs = np.where(dark)
+    if len(xs) < 5:
+        return None
+    # Midline selection: bin dark pixels by angle; pick the one nearest the
+    # ideal radius in each angular bin. This gives one representative point
+    # per degree around the ring, unbiased by ring thickness.
+    actual_dist = np.sqrt((xs - cx_ideal) ** 2 + (ys - cy_ideal) ** 2)
+    dev_from_ideal = np.abs(actual_dist - r_ideal)
+    angles = np.arctan2(ys - cy_ideal, xs - cx_ideal)
+    n_bins = 360
+    bin_idx = ((angles + np.pi) / (2.0 * np.pi) * n_bins).astype(int) % n_bins
+    midline_xs = []
+    midline_ys = []
+    for b in range(n_bins):
+        mask = bin_idx == b
+        if mask.sum() == 0:
+            continue
+        best = int(np.argmin(dev_from_ideal[mask]))
+        midline_xs.append(int(xs[mask][best]))
+        midline_ys.append(int(ys[mask][best]))
+    if len(midline_xs) < 5:
+        return None
+    mxs = np.array(midline_xs, dtype=np.float32)
+    mys = np.array(midline_ys, dtype=np.float32)
+    pts_mid = np.column_stack([mxs, mys]).astype(np.float32)
+    (cx, cy), (axis_a, axis_b), rot_deg = cv2.fitEllipse(pts_mid)
+    rx = min(axis_a, axis_b) / 2.0
+    ry = max(axis_a, axis_b) / 2.0
+    # fit_rms: radial residual on the midline point cloud.
+    theta = np.arctan2(mys - cy, mxs - cx)
+    rot_rad = np.deg2rad(rot_deg)
+    cos_t = np.cos(theta - rot_rad)
+    sin_t = np.sin(theta - rot_rad)
+    expected_r = (rx * ry) / np.sqrt((ry * cos_t) ** 2 + (rx * sin_t) ** 2 + 1e-9)
+    actual_r_mid = np.sqrt((mxs - cx) ** 2 + (mys - cy) ** 2)
+    fit_rms = float(np.sqrt(((actual_r_mid - expected_r) ** 2).mean()))
+    if fit_rms > 5.0:
+        return None
+    confidence = max(0.0, 1.0 - fit_rms / 10.0)
+    return {
+        "cx": float(cx),
+        "cy": float(cy),
+        "rx": float(rx),
+        "ry": float(ry),
+        "rotation_deg": float(rot_deg),
+        "fit_rms": fit_rms,
+        "confidence": confidence,
+    }
+
+
 def detect_fiducial(Y, fid):
     """Dispatch by fid['kind'] to the right detector implementation.
     Returns a detector-specific value (kind-dependent shape) or None."""
@@ -315,6 +381,8 @@ def detect_fiducial(Y, fid):
         return _detect_boundary_triangle(Y, fid)
     if kind == "registration_cross":
         return _detect_registration_cross(Y, fid)
+    if kind == "black_circle":
+        return _detect_black_circle(Y, fid)
     raise ValueError(f"unknown fiducial kind: {kind}")
 
 
