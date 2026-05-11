@@ -302,3 +302,22 @@ REGISTRATION_CROSS = {
     "box_size_px": 24,
     "search_window_px": 40,
 }
+
+
+# =====================================================================
+# BLACK CIRCLE (Stage 2)
+# =====================================================================
+#
+# Black ring centered on the picture. Diameter = picture height (486 px),
+# ring thickness 168 ns @ 13.5 MHz ~ 3 samples. Used to measure aspect
+# ratio (rx vs ry) and any picture-vs-spec scaling drift.
+
+BLACK_CIRCLE = {
+    "id": "BC",
+    "kind": "black_circle",
+    "ideal_cx": 360,
+    "ideal_cy": 243,
+    "expected_radius_px": 243,
+    "ring_thickness_px": 3,
+    "search_band_px": 15,
+}

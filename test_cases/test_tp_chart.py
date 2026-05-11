@@ -193,6 +193,17 @@ def test_registration_cross_catalog():
     assert rc["search_window_px"] >= 32
 
 
+def test_black_circle_catalog():
+    bc = tp_chart.BLACK_CIRCLE
+    assert bc["id"] == "BC"
+    assert bc["kind"] == "black_circle"
+    assert bc["ideal_cx"] == 360
+    assert bc["ideal_cy"] == 243
+    assert bc["expected_radius_px"] == 243
+    assert bc["ring_thickness_px"] == 3
+    assert bc["search_band_px"] >= 10
+
+
 TESTS = [
     test_constants_exist,
     test_rgb_norm_to_yuv10_black,
@@ -211,6 +222,7 @@ TESTS = [
     test_boundary_triangles_catalog,
     test_boundary_triangles_back_corner_spacing,
     test_registration_cross_catalog,
+    test_black_circle_catalog,
 ]
 
 
