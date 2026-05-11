@@ -144,11 +144,30 @@ def _apply_rotation_to_ground_truth(gt, theta_deg, cx=360.0, cy=243.0):
     return out
 
 
+def _add_noise(Y, sigma, rng=None):
+    if rng is None:
+        rng = np.random.default_rng(seed=12345)
+    noise = rng.normal(0.0, sigma, size=Y.shape).astype(np.float32)
+    out = Y.astype(np.float32) + noise
+    np.clip(out, 0, 1023, out=out)
+    return out.astype(Y.dtype)
+
+
+def _blur_y(Y, sigma):
+    import cv2
+    k = int(round(6 * sigma)) | 1
+    if k < 3:
+        k = 3
+    return cv2.GaussianBlur(Y, (k, k), sigma, borderType=cv2.BORDER_REPLICATE)
+
+
 def synthesize_with_ground_truth(
     width: int = 720,
     height: int = 486,
     shift: Tuple[int, int] = (0, 0),
     rotation_deg: float = 0.0,
+    noise_sigma: float = 0.0,
+    blur_sigma: float = 0.0,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
     Y, U, V = tp_synthesize.synthesize(width, height)
     gt = _build_identity_ground_truth()
@@ -160,4 +179,8 @@ def synthesize_with_ground_truth(
     if dx != 0 or dy != 0:
         Y, U, V = _shift_planes(Y, U, V, dx, dy)
         gt = _apply_shift_to_ground_truth(gt, dx, dy)
+    if blur_sigma > 0:
+        Y = _blur_y(Y, blur_sigma)
+    if noise_sigma > 0:
+        Y = _add_noise(Y, noise_sigma)
     return Y, U, V, gt

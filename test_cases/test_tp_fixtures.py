@@ -82,10 +82,36 @@ def test_fixture_rotation_updates_ground_truth_positions():
     assert abs(gy - new_y) < 0.6, f"{lm['id']} ground truth y mismatch: {gy} vs {new_y}"
 
 
+def test_fixture_noise_only_changes_pixel_values():
+    Y0, _, _, gt0 = tp_fixtures.synthesize_with_ground_truth()
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth(noise_sigma=20.0)
+    # Ground truth identical.
+    assert gt == gt0
+    # Y differs.
+    diff = (Y.astype(np.int32) - Y0.astype(np.int32)).astype(np.float64)
+    assert abs(diff.mean()) < 5.0, "noise should be zero-mean on average"
+    assert 15.0 < diff.std() < 25.0, f"noise sigma ~20 expected, got {diff.std()}"
+
+
+def test_fixture_blur_softens_edges_but_preserves_truth():
+    Y0, _, _, gt0 = tp_fixtures.synthesize_with_ground_truth()
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth(blur_sigma=1.5)
+    assert gt == gt0
+    # A grid-line pixel was black (Y10=64); after a 1.5σ blur over ~9 px it
+    # rises but should still be substantially darker than grey.
+    # Pick any grid landmark.
+    lm = tp_chart.GRID_LANDMARKS[0]
+    gx, gy = lm["ideal_x"], lm["ideal_y"]
+    assert Y[gy, gx] > tp_chart.BLACK_Y10
+    assert Y[gy, gx] < tp_chart.GREY_BACKGROUND_Y10 - 50
+
+
 TESTS = [
     test_fixture_identity_ground_truth_matches_chart_catalog,
     test_fixture_shift_updates_ground_truth_and_frame,
     test_fixture_rotation_updates_ground_truth_positions,
+    test_fixture_noise_only_changes_pixel_values,
+    test_fixture_blur_softens_edges_but_preserves_truth,
 ]
 
 
