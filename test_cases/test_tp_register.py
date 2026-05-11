@@ -248,6 +248,36 @@ def test_detect_black_circle_noise_sigma_20():
     assert abs(result["ry"] - truth_r) < 1.5
 
 
+def test_detect_geometry_returns_full_block_on_clean_fixture():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth()
+    M_identity = np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
+    geom = tp_register.detect_geometry(Y, M_identity)
+    assert geom is not None
+    assert "fiducials" in geom
+    assert "derived" in geom
+    tris = geom["fiducials"]["triangles"]
+    assert set(tris.keys()) == {"TL", "TR", "BL", "BR"}
+    # Derived box close to apex positions: TL/TR apex y≈3, BL/BR apex y≈482.
+    box = geom["derived"]["active_picture_box"]
+    assert abs(box["top"] - 3.0) < 1.5
+    assert abs(box["bottom"] - 482.0) < 1.5
+    assert abs(box["left"] - 60.0) < 1.5
+    assert abs(box["right"] - 660.0) < 1.5
+    # Aspect check near 1.0 (square circle).
+    assert abs(geom["derived"]["aspect_ratio_check"] - 1.0) < 0.005
+    # Aperture symmetry near 1.0 (cross is symmetric).
+    assert abs(geom["derived"]["aperture_symmetry"] - 1.0) < 0.1
+
+
+def test_detect_geometry_clip_top_marks_apexes_invisible():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth(clip_top=5)
+    M_identity = np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
+    geom = tp_register.detect_geometry(Y, M_identity)
+    assert geom["derived"]["clip_detected"]["TL"]["apex_visible"] is False
+    assert geom["derived"]["clip_detected"]["TR"]["apex_visible"] is False
+    assert geom["derived"]["clip_detected"]["BL"]["apex_visible"] is True
+
+
 TESTS = [
     test_detect_landmark_on_synthesized_ideal,
     test_detect_landmark_off_grid_returns_none,
@@ -268,6 +298,8 @@ TESTS = [
     test_detect_registration_cross_noise_sigma_20,
     test_detect_black_circle_identity,
     test_detect_black_circle_noise_sigma_20,
+    test_detect_geometry_returns_full_block_on_clean_fixture,
+    test_detect_geometry_clip_top_marks_apexes_invisible,
 ]
 
 

@@ -165,6 +165,24 @@ def _detect_boundary_triangle(Y, fid):
     apex_inferred = (back_midpoint[0] + offset[0],
                      back_midpoint[1] + offset[1])
 
+    # Quick clip-detection check: if the pixel at apex_inferred is in a
+    # "sub-black" region (Y well below BLACK_Y10), the frame edge has been
+    # zeroed (hardware clip or synthesized edge mask). Skip apex detection
+    # entirely so that apex_detected = None signals the clip.
+    ai_x_clamped = max(0, min(w - 1, int(round(apex_inferred[0]))))
+    ai_y_clamped = max(0, min(h - 1, int(round(apex_inferred[1]))))
+    apex_region_y = float(Y[ai_y_clamped, ai_x_clamped])
+    _CLIP_DETECT_THRESHOLD = tp_chart.BLACK_Y10 / 2.0  # Y much < 32 => clipped
+    if apex_region_y < _CLIP_DETECT_THRESHOLD:
+        return {
+            "back_corner_1": bc1,
+            "back_corner_2": bc2,
+            "back_midpoint": back_midpoint,
+            "apex_inferred": apex_inferred,
+            "apex_detected": None,
+            "confidence": confidence,
+        }
+
     # Apex detection: search a small window centered on apex_inferred.
     apex_margin = 3
     ai_y = apex_inferred[1]
@@ -177,21 +195,37 @@ def _detect_boundary_triangle(Y, fid):
     chart_spec_dist = abs(offset[1])
     apex_detected = None
     if len(apex_ys) > 0:
-        if orient == "apex_up":
-            cand_r = int(apex_ys.min())    # topmost dark pixel
-        else:
-            cand_r = int(apex_ys.max())    # bottommost dark pixel
-        abs_cand_y = float(ay_lo + cand_r)
-        observed_dist = abs(abs_cand_y - abs_back_y)
-        if abs(observed_dist - chart_spec_dist) <= 2:
+        local_cx = center_x - x0
+        # A true apex tip is narrow (≤ back-edge width). Rows where nearly
+        # all pixels are dark are chart borders or clipped regions — skip them.
+        # Max width of a genuine near-center apex hit = 2 * base_half.
+        max_apex_width = int(2 * base_half)
+        # Collect all rows within distance tolerance whose dark pixels are
+        # narrow (apex-like) and near center_x. Then pick the extreme
+        # (topmost for apex_up, bottommost for apex_down). This skips
+        # chart-border rows (fully dark) that lie at the wrong distance,
+        # while still finding the real apex within the search window.
+        valid_candidates = []
+        for cand_r in np.unique(apex_ys):
+            cand_r = int(cand_r)
+            abs_cand_y = float(ay_lo + cand_r)
+            observed_dist = abs(abs_cand_y - abs_back_y)
+            if abs(observed_dist - chart_spec_dist) > 2:
+                continue
             mask_r = apex_ys == cand_r
             xs_at_r = apex_xs[mask_r]
-            # Require apex dark pixels to be near center_x.
-            local_cx = center_x - x0
             near_center = xs_at_r[np.abs(xs_at_r - local_cx) <= base_half + 2]
-            if len(near_center) > 0:
-                apex_lx = float(near_center.mean())
-                apex_detected = (x0 + apex_lx, abs_cand_y)
+            # Skip rows that are too wide to be a triangle apex tip.
+            if len(near_center) == 0 or len(near_center) > max_apex_width:
+                continue
+            valid_candidates.append((cand_r, float(near_center.mean())))
+        if valid_candidates:
+            if orient == "apex_up":
+                cand_r, apex_lx = min(valid_candidates, key=lambda c: c[0])
+            else:
+                cand_r, apex_lx = max(valid_candidates, key=lambda c: c[0])
+            abs_cand_y = float(ay_lo + cand_r)
+            apex_detected = (x0 + apex_lx, abs_cand_y)
 
     return {
         "back_corner_1": bc1,
@@ -518,3 +552,166 @@ def register(Y: np.ndarray) -> Dict[str, Any]:
         fit["quality_flag"] = "ok"
         fit["quality_reason"] = None
     return fit
+
+
+def _apply_affine_pt(M, x, y):
+    return (float(M[0, 0] * x + M[0, 1] * y + M[0, 2]),
+            float(M[1, 0] * x + M[1, 1] * y + M[1, 2]))
+
+
+def detect_geometry(Y, M_initial):
+    """Run all Stage 2 detectors against captured frame Y and compute
+    derived geometry.
+
+    M_initial: 2x3 affine mapping ideal -> capture coords. Used to project
+               each fiducial's ideal search-window center into capture
+               coords for the detector's search.
+    """
+    h, w = Y.shape
+    fiducials = {"triangles": {}, "cross": None, "circle": None}
+
+    # Triangles -- shift ideal_back_midpoint and ideal_apex through M_initial
+    # so the detector searches the right capture-coord region. Keep the chart-
+    # spec offsets (apex - back_midpoint) for use in apex_inferred.
+    for tri in tp_chart.BOUNDARY_TRIANGLES:
+        bm = tri["ideal_back_midpoint"]
+        ap = tri["ideal_apex"]
+        bm_proj = _apply_affine_pt(M_initial, bm[0], bm[1])
+        ap_proj = _apply_affine_pt(M_initial, ap[0], ap[1])
+        tri_capture = dict(
+            tri,
+            ideal_back_midpoint=(int(round(bm_proj[0])), int(round(bm_proj[1]))),
+            ideal_apex=(float(ap_proj[0]), float(ap_proj[1])),
+        )
+        result = _detect_boundary_triangle(Y, tri_capture)
+        fiducials["triangles"][tri["id"]] = result
+
+    # Cross
+    rc = tp_chart.REGISTRATION_CROSS
+    proj_x, proj_y = _apply_affine_pt(M_initial, rc["ideal_x"], rc["ideal_y"])
+    rc_capture = dict(rc, ideal_x=int(round(proj_x)), ideal_y=int(round(proj_y)))
+    fiducials["cross"] = _detect_registration_cross(Y, rc_capture)
+
+    # Circle
+    bc = tp_chart.BLACK_CIRCLE
+    proj_x, proj_y = _apply_affine_pt(M_initial, bc["ideal_cx"], bc["ideal_cy"])
+    bc_capture = dict(bc, ideal_cx=float(proj_x), ideal_cy=float(proj_y))
+    fiducials["circle"] = _detect_black_circle(Y, bc_capture)
+
+    derived = _derive_geometry(fiducials, M_initial, w, h)
+    return {"fiducials": fiducials, "derived": derived}
+
+
+def _derive_geometry(fiducials, M, width, height):
+    tris = fiducials["triangles"]
+    derived = {}
+
+    def _apex_inferred(tid):
+        t = tris.get(tid)
+        return t["apex_inferred"] if t is not None else None
+
+    TL = _apex_inferred("TL"); TR = _apex_inferred("TR")
+    BL = _apex_inferred("BL"); BR = _apex_inferred("BR")
+
+    if all(p is not None for p in (TL, TR, BL, BR)):
+        active_picture_box = {
+            "top":    (TL[1] + TR[1]) / 2.0,
+            "bottom": (BL[1] + BR[1]) / 2.0,
+            "left":   (TL[0] + BL[0]) / 2.0,
+            "right":  (TR[0] + BR[0]) / 2.0,
+        }
+        derived["active_picture_box"] = active_picture_box
+        derived["picture_extent_px"] = {
+            "width":  active_picture_box["right"]  - active_picture_box["left"],
+            "height": active_picture_box["bottom"] - active_picture_box["top"],
+        }
+        corners = tp_chart.IDEAL_PICTURE_BOX_CORNERS
+        ideal_in_cap = [_apply_affine_pt(M, x, y) for x, y in corners]
+        ideal_left = min(p[0] for p in ideal_in_cap)
+        ideal_top  = min(p[1] for p in ideal_in_cap)
+        derived["picture_offset_from_ideal"] = {
+            "dx": active_picture_box["left"] - ideal_left,
+            "dy": active_picture_box["top"]  - ideal_top,
+        }
+        top_w = TR[0] - TL[0]
+        bot_w = BR[0] - BL[0]
+        left_h = BL[1] - TL[1]
+        right_h = BR[1] - TR[1]
+        derived["corner_skew_px"] = {
+            "top_vs_bottom_width_diff":  abs(top_w - bot_w),
+            "left_vs_right_height_diff": abs(left_h - right_h),
+        }
+        derived["arrow_tip_coords"] = {
+            "TL": TL, "TR": TR, "BL": BL, "BR": BR,
+        }
+    else:
+        for key in ("active_picture_box", "picture_extent_px",
+                    "picture_offset_from_ideal", "corner_skew_px",
+                    "arrow_tip_coords"):
+            derived[key] = None
+
+    # Clip detection per triangle.
+    clip = {}
+    for tid in ("TL", "TR", "BL", "BR"):
+        t = tris.get(tid)
+        if t is None:
+            clip[tid] = {"apex_visible": False, "clip_px": None,
+                         "interpretation": "triangle not detected"}
+            continue
+        apex_visible = t["apex_detected"] is not None
+        clip_px = 0.0
+        interp = "no clip detected"
+        ax, ay = t["apex_inferred"]
+        orient = next(tt["orientation"] for tt in tp_chart.BOUNDARY_TRIANGLES
+                      if tt["id"] == tid)
+        if not apex_visible:
+            if orient == "apex_up":
+                clip_px = max(0.0, -ay)
+                if ay < 1:
+                    clip_px = max(clip_px, 1.0 - ay)
+                interp = f"top edge clipped ~{clip_px:.0f} px" if clip_px > 0 else "apex not detected"
+            elif orient == "apex_down":
+                clip_px = max(0.0, ay - (height - 1))
+                if ay > height - 2:
+                    clip_px = max(clip_px, ay - (height - 2))
+                interp = f"bottom edge clipped ~{clip_px:.0f} px" if clip_px > 0 else "apex not detected"
+        clip[tid] = {
+            "apex_visible": apex_visible,
+            "clip_px": float(clip_px),
+            "interpretation": interp,
+        }
+    derived["clip_detected"] = clip
+
+    rc = fiducials["cross"]
+    if rc is not None:
+        ideal_cx, ideal_cy = _apply_affine_pt(
+            M, tp_chart.REGISTRATION_CROSS["ideal_x"],
+               tp_chart.REGISTRATION_CROSS["ideal_y"])
+        derived["cross_offset_from_ideal"] = [rc["x"] - ideal_cx,
+                                              rc["y"] - ideal_cy]
+        h_arm = rc["h_arm_len_px"]; v_arm = rc["v_arm_len_px"]
+        if max(h_arm, v_arm) > 0:
+            derived["aperture_symmetry"] = float(min(h_arm, v_arm) / max(h_arm, v_arm))
+        else:
+            derived["aperture_symmetry"] = None
+    else:
+        derived["cross_offset_from_ideal"] = None
+        derived["aperture_symmetry"] = None
+
+    bc = fiducials["circle"]
+    if bc is not None:
+        rx, ry = bc["rx"], bc["ry"]
+        derived["aspect_ratio_check"] = float(min(rx, ry) / max(rx, ry))
+        if derived.get("picture_extent_px") is not None:
+            derived["diameter_vs_picture_height"] = float(
+                2.0 * max(rx, ry) / derived["picture_extent_px"]["height"]
+            )
+        else:
+            derived["diameter_vs_picture_height"] = None
+        derived["circle_fit_rms"] = float(bc["fit_rms"])
+    else:
+        derived["aspect_ratio_check"] = None
+        derived["diameter_vs_picture_height"] = None
+        derived["circle_fit_rms"] = None
+
+    return derived
