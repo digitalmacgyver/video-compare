@@ -280,7 +280,14 @@ code { color: #c5d1e0; }
 .geo-table th, .geo-table td { border: 1px solid #2a2e36; padding: 3px 6px; font-size: 12px; }
 .diag-panel { margin: 16px 0; padding: 8px; background: #1d2026; border: 1px solid #2a2e36; }
 .diag-panel h3 { margin: 4px 0 8px 0; font-size: 14px; }
-.diag-img { display: block; max-width: 100%; image-rendering: pixelated; }
+.diag-zoom-readout { font-size: 11px; color: #8a929f; font-weight: 400; margin-left: 6px; }
+.diag-zoom-container { position: relative; overflow: hidden; cursor: grab; outline: none;
+    border: 1px solid #2a2e36; background: #000; width: 100%; height: 720px; }
+.diag-zoom-container:focus { outline: 1px solid #61c08f; }
+.diag-img { display: block; max-width: none; transform-origin: 0 0; image-rendering: pixelated;
+    user-select: none; -webkit-user-drag: none; }
+kbd { background: #2a2e36; padding: 1px 6px; border-radius: 3px; font-family: monospace;
+    font-size: 11px; border: 1px solid #3a3e46; }
 ul.legend { font-size: 12px; color: #b8c0cc; line-height: 1.7; margin: 6px 0 12px 18px; }
 """
 
@@ -531,8 +538,11 @@ def render_sample_diagnostics(captures: List[Dict[str, Any]]) -> str:
             b64 = base64.b64encode(f.read()).decode("ascii")
         panels.append(
             f"<div class='diag-panel'>"
-            f"<h3>{_h.escape(cap_name)}</h3>"
-            f"<img class='diag-img' src='data:image/png;base64,{b64}'/>"
+            f"<h3>{_h.escape(cap_name)} "
+            f"<span class='diag-zoom-readout'></span></h3>"
+            f"<div class='diag-zoom-container' tabindex='0'>"
+            f"<img class='diag-img' src='data:image/png;base64,{b64}' draggable='false'/>"
+            f"</div>"
             f"</div>"
         )
     if not panels:
@@ -545,6 +555,9 @@ def render_sample_diagnostics(captures: List[Dict[str, Any]]) -> str:
     overlays at the positions where measurements were taken. Use this
     to spot-check whether a sample window straddles the wrong chart
     region (which would explain anomalous deltas in the tables above).
+    <br><b>Controls:</b> hover the image, then mouse-wheel to zoom
+    centered on the cursor, click-and-drag to pan, press
+    <kbd>R</kbd> to reset.
   </p>
   <ul class="legend">
     <li><span style='color:#0ff'>cyan</span> boxes: tartan sample windows (with region ID).</li>
@@ -555,6 +568,70 @@ def render_sample_diagnostics(captures: List[Dict[str, Any]]) -> str:
   </ul>
   {''.join(panels)}
 </section>
+<script>
+(function() {{
+    function initZoom(container) {{
+        var img = container.querySelector('.diag-img');
+        var readout = container.parentElement.querySelector('.diag-zoom-readout');
+        var scale = 1, tx = 0, ty = 0;
+        var panning = false, lastX = 0, lastY = 0;
+        function apply() {{
+            img.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(' + scale + ')';
+            if (readout) readout.textContent = '[zoom ' + scale.toFixed(2) + 'x]';
+        }}
+        function reset() {{ scale = 1; tx = 0; ty = 0; apply(); }}
+        container.addEventListener('wheel', function(e) {{
+            e.preventDefault();
+            var rect = container.getBoundingClientRect();
+            var mx = e.clientX - rect.left;
+            var my = e.clientY - rect.top;
+            var oldScale = scale;
+            var factor = e.deltaY < 0 ? 1.25 : 1.0 / 1.25;
+            scale = Math.max(0.25, Math.min(40, scale * factor));
+            tx = mx - (mx - tx) * (scale / oldScale);
+            ty = my - (my - ty) * (scale / oldScale);
+            apply();
+        }}, {{ passive: false }});
+        container.addEventListener('mousedown', function(e) {{
+            panning = true; lastX = e.clientX; lastY = e.clientY;
+            container.style.cursor = 'grabbing';
+            container.focus();
+            e.preventDefault();
+        }});
+        window.addEventListener('mousemove', function(e) {{
+            if (!panning) return;
+            tx += e.clientX - lastX;
+            ty += e.clientY - lastY;
+            lastX = e.clientX; lastY = e.clientY;
+            apply();
+        }});
+        window.addEventListener('mouseup', function() {{
+            if (panning) {{ panning = false; container.style.cursor = 'grab'; }}
+        }});
+        container.addEventListener('mouseenter', function() {{ container.focus(); }});
+        container.addEventListener('keydown', function(e) {{
+            if (e.key === 'r' || e.key === 'R') {{ reset(); e.preventDefault(); }}
+        }});
+        // Double-click toggles zoom: identity <-> 4x at cursor.
+        container.addEventListener('dblclick', function(e) {{
+            var rect = container.getBoundingClientRect();
+            var mx = e.clientX - rect.left;
+            var my = e.clientY - rect.top;
+            if (scale > 1.05) {{
+                reset();
+            }} else {{
+                var oldScale = scale;
+                scale = 4;
+                tx = mx - (mx - tx) * (scale / oldScale);
+                ty = my - (my - ty) * (scale / oldScale);
+                apply();
+            }}
+        }});
+        apply();
+    }}
+    document.querySelectorAll('.diag-zoom-container').forEach(initZoom);
+}})();
+</script>
 """
 
 
