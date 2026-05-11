@@ -149,6 +149,38 @@ def test_ideal_picture_box():
     assert corners == [(0, 0), (719, 0), (0, 485), (719, 485)]
 
 
+def test_boundary_triangles_catalog():
+    tris = tp_chart.BOUNDARY_TRIANGLES
+    assert [t["id"] for t in tris] == ["TL", "TR", "BL", "BR"]
+    expected_orient = {"TL": "apex_up", "TR": "apex_up",
+                       "BL": "apex_down", "BR": "apex_down"}
+    for t in tris:
+        assert t["kind"] == "boundary_triangle"
+        assert t["orientation"] == expected_orient[t["id"]]
+        for key in ("ideal_back_corner_1", "ideal_back_corner_2",
+                    "ideal_back_midpoint", "ideal_apex",
+                    "search_window_px"):
+            assert key in t, key
+        bm = t["ideal_back_midpoint"]
+        bc1 = t["ideal_back_corner_1"]
+        bc2 = t["ideal_back_corner_2"]
+        # back_midpoint is the midpoint of the two back corners.
+        assert bm == ((bc1[0] + bc2[0]) / 2, (bc1[1] + bc2[1]) / 2)
+        # apex sits 27 px from back_midpoint in the orientation direction.
+        if t["orientation"] == "apex_up":
+            assert t["ideal_apex"] == (bm[0], bm[1] - 27)
+        elif t["orientation"] == "apex_down":
+            assert t["ideal_apex"] == (bm[0], bm[1] + 27)
+
+
+def test_boundary_triangles_back_corner_spacing():
+    # 20 px base across the back edge.
+    for t in tp_chart.BOUNDARY_TRIANGLES:
+        bc1, bc2 = t["ideal_back_corner_1"], t["ideal_back_corner_2"]
+        spacing = ((bc1[0] - bc2[0]) ** 2 + (bc1[1] - bc2[1]) ** 2) ** 0.5
+        assert abs(spacing - 20.0) < 0.5
+
+
 TESTS = [
     test_constants_exist,
     test_rgb_norm_to_yuv10_black,
@@ -164,6 +196,8 @@ TESTS = [
     test_grid_landmarks,
     test_grid_landmark_distribution,
     test_ideal_picture_box,
+    test_boundary_triangles_catalog,
+    test_boundary_triangles_back_corner_spacing,
 ]
 
 

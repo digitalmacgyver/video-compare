@@ -227,3 +227,57 @@ GRID_LANDMARKS = [
     }
     for rid, x, y in _LANDMARK_GRID
 ]
+
+
+# =====================================================================
+# BOUNDARY TRIANGLES (Stage 2)
+# =====================================================================
+#
+# 4 corner-region triangles that mark the picture boundaries. TL/TR point
+# UP (apex toward top edge); BL/BR point DOWN (apex toward bottom edge).
+# The base of each triangle (back edge, furthest from the picture edge it
+# marks) sits 30 px inside the chart from the corresponding edge.
+#
+# Registration uses the back corners (clip-resistant). The apex can be
+# either detected from data or inferred from back_midpoint + chart-spec
+# offset (apex - back_midpoint).
+
+_BASE_HALF = 10   # half the back-edge width (20 px total)
+_HEIGHT    = 27   # apex distance from back_midpoint (perpendicular)
+_BACK_INSET = 30  # back edge sits 30 px inside the chart from the edge
+
+
+def _make_triangle(rid, orientation, x_center, edge):
+    """Build a triangle entry. `edge` is the chart edge it marks
+    ('top' or 'bottom'); the back edge sits `_BACK_INSET` px inside
+    that edge; the apex sits at the edge."""
+    if edge == "top":
+        back_y = _BACK_INSET
+        apex_y = back_y - _HEIGHT
+    elif edge == "bottom":
+        back_y = 485 - _BACK_INSET
+        apex_y = back_y + _HEIGHT
+    else:
+        raise ValueError(edge)
+    bc1 = (x_center - _BASE_HALF, back_y)
+    bc2 = (x_center + _BASE_HALF, back_y)
+    bm  = (x_center, back_y)
+    apex = (x_center, apex_y)
+    return {
+        "id": rid,
+        "kind": "boundary_triangle",
+        "orientation": orientation,
+        "ideal_back_corner_1": bc1,
+        "ideal_back_corner_2": bc2,
+        "ideal_back_midpoint": bm,
+        "ideal_apex": apex,
+        "search_window_px": 40,
+    }
+
+
+BOUNDARY_TRIANGLES = [
+    _make_triangle("TL", "apex_up",   60, "top"),
+    _make_triangle("TR", "apex_up",  660, "top"),
+    _make_triangle("BL", "apex_down", 60, "bottom"),
+    _make_triangle("BR", "apex_down", 660, "bottom"),
+]
