@@ -715,3 +715,74 @@ def _derive_geometry(fiducials, M, width, height):
         derived["circle_fit_rms"] = None
 
     return derived
+
+
+def register_with_geometry(Y):
+    """Sequential-with-feedback registration.
+
+    Returns:
+        {
+            "initial":  <Stage 1 register() result>,
+            "geometry": <detect_geometry() result>,
+            "final":    <fit_affine() result on grids+geometry anchors>,
+            "anchors_added": [<ids appended after Stage 1>],
+        }
+    """
+    initial = register(Y)
+    if initial["affine_matrix"] is None:
+        return {"initial": initial, "geometry": None, "final": initial,
+                "anchors_added": []}
+    M_initial = initial["affine_matrix"]
+    geometry = detect_geometry(Y, M_initial)
+
+    detected_pts = []
+    ideal_pts = []
+    anchors_added = []
+    for lm in tp_chart.GRID_LANDMARKS:
+        det = detect_fiducial(Y, lm)
+        if det is None:
+            continue
+        dx, dy, _ = det
+        detected_pts.append((dx, dy))
+        ideal_pts.append((lm["ideal_x"], lm["ideal_y"]))
+
+    tris = geometry["fiducials"]["triangles"]
+    for tri in tp_chart.BOUNDARY_TRIANGLES:
+        t = tris.get(tri["id"])
+        if t is None:
+            continue
+        for cap_key, ideal_key, suffix in (
+            ("back_corner_1", "ideal_back_corner_1", "bc1"),
+            ("back_corner_2", "ideal_back_corner_2", "bc2"),
+        ):
+            detected_pts.append(t[cap_key])
+            ideal_pts.append(tri[ideal_key])
+            anchors_added.append(f"{tri['id']}.{suffix}")
+
+    rc = geometry["fiducials"]["cross"]
+    if rc is not None:
+        detected_pts.append((rc["x"], rc["y"]))
+        ideal_pts.append((tp_chart.REGISTRATION_CROSS["ideal_x"],
+                          tp_chart.REGISTRATION_CROSS["ideal_y"]))
+        anchors_added.append("RC")
+
+    final = fit_affine(np.asarray(detected_pts, dtype=np.float32),
+                       np.asarray(ideal_pts, dtype=np.float32))
+    final["total"] = len(detected_pts)
+    if final["affine_matrix"] is None or final["inliers"] < MIN_INLIERS:
+        final["quality_flag"] = "failed"
+        final["quality_reason"] = "RANSAC failed or too few inliers"
+    elif (final["residuals_px"]["mean"] > RESIDUAL_OK_MEAN_PX
+          or final["residuals_px"]["max"] > RESIDUAL_OK_MAX_PX):
+        final["quality_flag"] = "warn"
+        final["quality_reason"] = "residuals exceed threshold"
+    else:
+        final["quality_flag"] = "ok"
+        final["quality_reason"] = None
+
+    return {
+        "initial": initial,
+        "geometry": geometry,
+        "final": final,
+        "anchors_added": anchors_added,
+    }

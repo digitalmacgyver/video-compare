@@ -278,6 +278,31 @@ def test_detect_geometry_clip_top_marks_apexes_invisible():
     assert geom["derived"]["clip_detected"]["BL"]["apex_visible"] is True
 
 
+def test_register_with_geometry_increases_inlier_count():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth()
+    result = tp_register.register_with_geometry(Y)
+    assert result["initial"]["affine_matrix"] is not None
+    assert result["geometry"] is not None
+    assert result["final"]["affine_matrix"] is not None
+    # The final fit has at least as many inliers as the initial fit.
+    assert result["final"]["inliers"] >= result["initial"]["inliers"]
+    # Residuals on final fit no worse than initial fit's.
+    assert (result["final"]["residuals_px"]["mean"]
+            <= result["initial"]["residuals_px"]["mean"] + 0.1)
+
+
+def test_register_with_geometry_preserves_identity_on_synthesized():
+    Y, _, _, _ = tp_fixtures.synthesize_with_ground_truth()
+    result = tp_register.register_with_geometry(Y)
+    M = result["final"]["affine_matrix"]
+    assert abs(M[0, 0] - 1.0) < 0.005
+    assert abs(M[1, 1] - 1.0) < 0.005
+    assert abs(M[0, 1]) < 0.005
+    assert abs(M[1, 0]) < 0.005
+    assert abs(M[0, 2]) < 0.5
+    assert abs(M[1, 2]) < 0.5
+
+
 TESTS = [
     test_detect_landmark_on_synthesized_ideal,
     test_detect_landmark_off_grid_returns_none,
@@ -300,6 +325,8 @@ TESTS = [
     test_detect_black_circle_noise_sigma_20,
     test_detect_geometry_returns_full_block_on_clean_fixture,
     test_detect_geometry_clip_top_marks_apexes_invisible,
+    test_register_with_geometry_increases_inlier_count,
+    test_register_with_geometry_preserves_identity_on_synthesized,
 ]
 
 
