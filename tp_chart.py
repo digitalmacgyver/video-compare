@@ -182,6 +182,9 @@ GRAY_REGIONS = _build_gray_regions()
 # interior of the chart (avoiding the tartan/gray strip on the upper-left,
 # the busy top of the chart, and the chart border).
 #
+# Grid spacing: 60 px (x) × 54 px (y), so valid intersections are multiples
+# of 60 and 54.
+#
 # Diagnostic context: the Stage 1 catalog (8 anchors including L8 at
 # (360, 378) and L1-L3 at y=54) gave only 4 of 8 surviving RANSAC -- L8 has
 # no clean intersection, the top row was near the boundary triangles and

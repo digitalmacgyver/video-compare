@@ -132,6 +132,13 @@ def test_grid_landmark_distribution():
     # 3 anchors per y-row for x-spread, 4 distinct y-rows.
     ys = sorted({lm["ideal_y"] for lm in tp_chart.GRID_LANDMARKS})
     assert ys == [108, 162, 216, 270]
+    # Verify each y-row has exactly 3 anchors (balanced x-spread per row).
+    import collections
+    row_counts = collections.Counter(lm["ideal_y"] for lm in tp_chart.GRID_LANDMARKS)
+    assert all(count == 3 for count in row_counts.values()), dict(row_counts)
+    # x-values must avoid the burst-column region; exact set is intentional.
+    xs = sorted({lm["ideal_x"] for lm in tp_chart.GRID_LANDMARKS})
+    assert xs == [180, 360, 420, 540, 600], xs
 
 
 TESTS = [
