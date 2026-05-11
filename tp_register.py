@@ -203,6 +203,108 @@ def _detect_boundary_triangle(Y, fid):
     }
 
 
+_RC_TEMPLATE_CACHE = None
+
+
+def _build_registration_cross_template():
+    """Build a 24x24 template matching tp_chart.REGISTRATION_CROSS: black box
+    with centered white + (3 px arm thickness, 17 px arm length)."""
+    rc = tp_chart.REGISTRATION_CROSS
+    size = rc["box_size_px"]
+    t = np.full((size, size), 0, dtype=np.float32)  # black box
+    half = size // 2
+    half_len = rc["ideal_arm_len_px"] // 2
+    half_th = rc["ideal_arm_thickness_px"] // 2
+    t[half - half_th:half + half_th + 1, half - half_len:half + half_len + 1] = 255.0
+    t[half - half_len:half + half_len + 1, half - half_th:half + half_th + 1] = 255.0
+    return t
+
+
+def _registration_cross_template():
+    global _RC_TEMPLATE_CACHE
+    if _RC_TEMPLATE_CACHE is None:
+        _RC_TEMPLATE_CACHE = _build_registration_cross_template()
+    return _RC_TEMPLATE_CACHE
+
+
+def _parabolic_subpixel(left, center, right):
+    """1D parabolic fit; returns offset in [-1, +1] from center."""
+    denom = (left + right - 2.0 * center)
+    if abs(denom) < 1e-9:
+        return 0.0
+    return float(0.5 * (left - right) / denom)
+
+
+def _count_bright_run(line, center_idx):
+    """Walk left and right from center_idx along `line`, counting pixels with
+    Y10 > 700 contiguously. Returns total run length including center."""
+    n = len(line)
+    threshold = 700
+    count = 1 if line[center_idx] > threshold else 0
+    for i in range(center_idx - 1, -1, -1):
+        if line[i] > threshold:
+            count += 1
+        else:
+            break
+    for i in range(center_idx + 1, n):
+        if line[i] > threshold:
+            count += 1
+        else:
+            break
+    return count
+
+
+def _detect_registration_cross(Y, fid):
+    import cv2
+    h, w = Y.shape
+    half = fid["search_window_px"] // 2
+    cx, cy = fid["ideal_x"], fid["ideal_y"]
+    x0 = max(0, cx - half); y0 = max(0, cy - half)
+    x1 = min(w, cx + half); y1 = min(h, cy + half)
+    win = Y[y0:y1, x0:x1].astype(np.float32)
+    # Normalize window to 0..255 for matchTemplate consistency with the template.
+    win_n = np.clip(
+        (win - tp_chart.BLACK_Y10) / (tp_chart.WHITE_Y10 - tp_chart.BLACK_Y10),
+        0, 1,
+    ) * 255.0
+    win_n = win_n.astype(np.float32)
+    template = _registration_cross_template()
+    if win_n.shape[0] < template.shape[0] or win_n.shape[1] < template.shape[1]:
+        return None
+    result = cv2.matchTemplate(win_n, template, cv2.TM_SQDIFF_NORMED)
+    min_val, _max, min_loc, _maxloc = cv2.minMaxLoc(result)
+    confidence = float(1.0 - min_val)
+    if confidence < 0.4:
+        return None
+    px, py = min_loc
+    rh, rw = result.shape
+    if 1 <= px < rw - 1 and 1 <= py < rh - 1:
+        dx = _parabolic_subpixel(result[py, px - 1], result[py, px], result[py, px + 1])
+        dy = _parabolic_subpixel(result[py - 1, px], result[py, px], result[py + 1, px])
+    else:
+        dx = 0.0
+        dy = 0.0
+    template_h, template_w = template.shape
+    cross_x_local = px + dx + template_w / 2.0
+    cross_y_local = py + dy + template_h / 2.0
+    cross_x = x0 + cross_x_local
+    cross_y = y0 + cross_y_local
+    # Measure arm lengths along center lines.
+    cy_int = int(round(cross_y))
+    cx_int = int(round(cross_x))
+    cy_int = max(0, min(h - 1, cy_int))
+    cx_int = max(0, min(w - 1, cx_int))
+    h_arm_len = _count_bright_run(Y[cy_int, :], cx_int)
+    v_arm_len = _count_bright_run(Y[:, cx_int], cy_int)
+    return {
+        "x": float(cross_x),
+        "y": float(cross_y),
+        "h_arm_len_px": float(h_arm_len),
+        "v_arm_len_px": float(v_arm_len),
+        "confidence": confidence,
+    }
+
+
 def detect_fiducial(Y, fid):
     """Dispatch by fid['kind'] to the right detector implementation.
     Returns a detector-specific value (kind-dependent shape) or None."""
@@ -211,6 +313,8 @@ def detect_fiducial(Y, fid):
         return _detect_grid_intersection(Y, fid)
     if kind == "boundary_triangle":
         return _detect_boundary_triangle(Y, fid)
+    if kind == "registration_cross":
+        return _detect_registration_cross(Y, fid)
     raise ValueError(f"unknown fiducial kind: {kind}")
 
 

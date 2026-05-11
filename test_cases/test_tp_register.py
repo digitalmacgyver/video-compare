@@ -190,6 +190,37 @@ def test_detect_boundary_triangle_clip_top_apex_inferred_only():
     assert result["apex_inferred"] is not None
 
 
+def test_detect_registration_cross_identity():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth()
+    rc = tp_chart.REGISTRATION_CROSS
+    result = tp_register.detect_fiducial(Y, rc)
+    assert result is not None
+    truth_x, truth_y = gt["cross"]["center"]
+    assert abs(result["x"] - truth_x) < 0.2
+    assert abs(result["y"] - truth_y) < 0.2
+    assert result["confidence"] > 0.6
+
+
+def test_detect_registration_cross_subpixel_shift():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth(shift=(5, 7))
+    rc = tp_chart.REGISTRATION_CROSS
+    result = tp_register.detect_fiducial(Y, rc)
+    assert result is not None
+    truth_x, truth_y = gt["cross"]["center"]
+    assert abs(result["x"] - truth_x) < 0.5
+    assert abs(result["y"] - truth_y) < 0.5
+
+
+def test_detect_registration_cross_noise_sigma_20():
+    Y, _, _, gt = tp_fixtures.synthesize_with_ground_truth(noise_sigma=20.0)
+    rc = tp_chart.REGISTRATION_CROSS
+    result = tp_register.detect_fiducial(Y, rc)
+    assert result is not None
+    truth_x, truth_y = gt["cross"]["center"]
+    err = ((result["x"] - truth_x) ** 2 + (result["y"] - truth_y) ** 2) ** 0.5
+    assert err < 0.6, f"noise σ=20 produced err {err:.2f} px > 0.6 px threshold"
+
+
 TESTS = [
     test_detect_landmark_on_synthesized_ideal,
     test_detect_landmark_off_grid_returns_none,
@@ -205,6 +236,9 @@ TESTS = [
     test_detect_boundary_triangle_noise_sigma_20,
     test_detect_boundary_triangle_blur_sigma_1_5,
     test_detect_boundary_triangle_clip_top_apex_inferred_only,
+    test_detect_registration_cross_identity,
+    test_detect_registration_cross_subpixel_shift,
+    test_detect_registration_cross_noise_sigma_20,
 ]
 
 
