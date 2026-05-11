@@ -62,9 +62,30 @@ def test_fixture_shift_updates_ground_truth_and_frame():
     assert (Y[:, :5] == tp_chart.GREY_BACKGROUND_Y10).all()
 
 
+def test_fixture_rotation_updates_ground_truth_positions():
+    import math
+    Y, U, V, gt = tp_fixtures.synthesize_with_ground_truth(rotation_deg=1.5)
+    # Rotation about picture center (360, 243). For cv2.getRotationMatrix2D
+    # with positive angle theta and y-down coords, the matrix is:
+    #   R = [[cos, sin, ...], [-sin, cos, ...]]
+    # so a point (px, py) maps to (cx + (px-cx)*cos + (py-cy)*sin,
+    #                              cy - (px-cx)*sin + (py-cy)*cos).
+    theta = math.radians(1.5)
+    cx, cy = 360.0, 243.0
+    # Pick any landmark to test against.
+    lm = tp_chart.GRID_LANDMARKS[0]
+    px, py = float(lm["ideal_x"]), float(lm["ideal_y"])
+    new_x = cx + (px - cx) * math.cos(theta) + (py - cy) * math.sin(theta)
+    new_y = cy - (px - cx) * math.sin(theta) + (py - cy) * math.cos(theta)
+    gx, gy = gt["grid_intersections"][lm["id"]]
+    assert abs(gx - new_x) < 0.6, f"{lm['id']} ground truth x mismatch: {gx} vs {new_x}"
+    assert abs(gy - new_y) < 0.6, f"{lm['id']} ground truth y mismatch: {gy} vs {new_y}"
+
+
 TESTS = [
     test_fixture_identity_ground_truth_matches_chart_catalog,
     test_fixture_shift_updates_ground_truth_and_frame,
+    test_fixture_rotation_updates_ground_truth_positions,
 ]
 
 
