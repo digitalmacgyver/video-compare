@@ -181,6 +181,18 @@ def test_boundary_triangles_back_corner_spacing():
         assert abs(spacing - 20.0) < 0.5
 
 
+def test_registration_cross_catalog():
+    rc = tp_chart.REGISTRATION_CROSS
+    assert rc["id"] == "RC"
+    assert rc["kind"] == "registration_cross"
+    assert rc["ideal_x"] == 360
+    assert rc["ideal_y"] == 243
+    assert rc["ideal_arm_len_px"] == 17
+    assert rc["ideal_arm_thickness_px"] == 3
+    assert rc["box_size_px"] == 24
+    assert rc["search_window_px"] >= 32
+
+
 TESTS = [
     test_constants_exist,
     test_rgb_norm_to_yuv10_black,
@@ -198,6 +210,7 @@ TESTS = [
     test_ideal_picture_box,
     test_boundary_triangles_catalog,
     test_boundary_triangles_back_corner_spacing,
+    test_registration_cross_catalog,
 ]
 
 

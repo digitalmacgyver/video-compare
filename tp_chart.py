@@ -281,3 +281,24 @@ BOUNDARY_TRIANGLES = [
     _make_triangle("BL", "apex_down", 60, "bottom"),
     _make_triangle("BR", "apex_down", 660, "bottom"),
 ]
+
+
+# =====================================================================
+# REGISTRATION CROSS (Stage 2)
+# =====================================================================
+#
+# Picture-center sub-pixel registration feature: a black box containing a
+# centered white "+". Used for sub-pixel registration accuracy and for
+# detecting directionally-biased aperture / sharpening filters via the
+# horizontal-vs-vertical arm-length asymmetry.
+
+REGISTRATION_CROSS = {
+    "id": "RC",
+    "kind": "registration_cross",
+    "ideal_x": 360,
+    "ideal_y": 243,
+    "ideal_arm_len_px": 17,    # tip-to-tip length of each arm
+    "ideal_arm_thickness_px": 3,
+    "box_size_px": 24,
+    "search_window_px": 40,
+}
