@@ -273,6 +273,11 @@ table.data th { background: #21252b; color: #fff; }
 .small { font-size: 11px; color: #b8c0cc; }
 .muted { color: #8a929f; }
 code { color: #c5d1e0; }
+.geometry-panel { margin: 12px 0; padding: 8px 12px; background: #1d2026; border: 1px solid #2a2e36; }
+.geometry-panel h3 { margin: 4px 0 8px 0; font-size: 14px; }
+.geometry-panel h4 { margin: 8px 0 4px 0; font-size: 12px; color: #c5d1e0; }
+.geo-table { border-collapse: collapse; }
+.geo-table th, .geo-table td { border: 1px solid #2a2e36; padding: 3px 6px; font-size: 12px; }
 """
 
 
@@ -359,10 +364,145 @@ def render_luma_scale_analysis(captures: List[Dict[str, Any]]) -> str:
 """
 
 
+def _delta_class_offset(value, green_lt, yellow_lt):
+    """Color class for an absolute offset/skew value."""
+    a = abs(value) if value is not None else 0
+    if a < green_lt:
+        return "delta-good"
+    if a < yellow_lt:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def render_geometry_section(captures: List[Dict[str, Any]]) -> str:
+    panels = []
+    for c in captures:
+        cap_name = _basename(c["_meta"]["capture"])
+        g = c.get("geometry")
+        if g is None:
+            panels.append(
+                f"<div class='geometry-panel'><h3>{_h.escape(cap_name)}</h3>"
+                f"<p class='muted'>no geometry block (older JSON)</p></div>"
+            )
+            continue
+        d = g["derived"]
+        flag = g.get("quality_flag", "?")
+        flag_class = {"ok": "ok", "warn": "warn", "partial": "warn",
+                      "failed": "bad"}.get(flag, "")
+        box = d.get("active_picture_box")
+        if box is not None:
+            offset = d.get("picture_offset_from_ideal", {})
+            skew = d.get("corner_skew_px", {})
+            box_html = (
+                f"<table class='geo-table'>"
+                f"<tr><th>top</th><th>left</th><th>bottom</th><th>right</th>"
+                f"<th>w&times;h</th></tr>"
+                f"<tr><td>{box['top']:.1f}</td><td>{box['left']:.1f}</td>"
+                f"<td>{box['bottom']:.1f}</td><td>{box['right']:.1f}</td>"
+                f"<td>{d['picture_extent_px']['width']:.1f}&times;"
+                f"{d['picture_extent_px']['height']:.1f}</td></tr></table>"
+                f"<div class='small'>"
+                f"offset <span class='{_delta_class_offset(offset.get('dx', 0), 2, 5)}'>"
+                f"dx={offset.get('dx', 0):+.1f}</span> "
+                f"<span class='{_delta_class_offset(offset.get('dy', 0), 2, 5)}'>"
+                f"dy={offset.get('dy', 0):+.1f}</span>"
+                f" &nbsp; skew "
+                f"<span class='{_delta_class_offset(skew.get('top_vs_bottom_width_diff', 0), 2, 5)}'>"
+                f"w_diff={skew.get('top_vs_bottom_width_diff', 0):.1f}</span> "
+                f"<span class='{_delta_class_offset(skew.get('left_vs_right_height_diff', 0), 2, 5)}'>"
+                f"h_diff={skew.get('left_vs_right_height_diff', 0):.1f}</span>"
+                f"</div>"
+            )
+        else:
+            box_html = "<p class='muted'>picture box not derivable</p>"
+
+        clip = d.get("clip_detected") or {}
+        clip_rows = []
+        for tid in ("TL", "TR", "BL", "BR"):
+            entry = clip.get(tid, {})
+            visible = entry.get("apex_visible", False)
+            interp = entry.get("interpretation", "?")
+            cls = "ok" if visible else "bad"
+            clip_rows.append(
+                f"<tr><td>{tid}</td>"
+                f"<td class='{cls}'>{'visible' if visible else 'clipped'}</td>"
+                f"<td>{_h.escape(interp)}</td></tr>"
+            )
+        clip_html = (
+            f"<table class='geo-table'><tr><th>Corner</th>"
+            f"<th>Apex</th><th>Interpretation</th></tr>"
+            + "".join(clip_rows) + "</table>"
+        )
+
+        cross_off = d.get("cross_offset_from_ideal") or [None, None]
+        aperture = d.get("aperture_symmetry")
+        if cross_off[0] is not None and aperture is not None:
+            cross_html = (
+                f"<div class='small'>"
+                f"offset dx={cross_off[0]:+.2f}, dy={cross_off[1]:+.2f}"
+                f" &nbsp; aperture_symmetry={aperture:.3f}"
+                f"</div>"
+            )
+        else:
+            cross_html = "<p class='muted'>cross missing</p>"
+
+        aspect = d.get("aspect_ratio_check")
+        dvp = d.get("diameter_vs_picture_height")
+        circle_fit_rms = d.get("circle_fit_rms")
+        if aspect is not None:
+            circle_html = (
+                f"<div class='small'>"
+                f"aspect_ratio_check={aspect:.4f} &nbsp; "
+                f"diameter_vs_picture_height={dvp:.3f} &nbsp; "
+                f"fit_rms={circle_fit_rms:.2f}px"
+                f"</div>"
+            )
+        else:
+            circle_html = "<p class='muted'>circle missing</p>"
+
+        refit = g.get("registration_refit", {})
+        mean_res = refit.get("final_residuals_px", {}).get("mean", float("nan"))
+        refit_html = (
+            f"<div class='small'>"
+            f"inliers: {refit.get('inlier_count_initial', '?')} "
+            f"&rarr; <b>{refit.get('inlier_count_final', '?')}</b> "
+            f" &nbsp; mean_residual={mean_res:.2f}px"
+            f"</div>"
+        )
+
+        panels.append(
+            f"<div class='geometry-panel'>"
+            f"<h3>{_h.escape(cap_name)} "
+            f"<span class='{flag_class}'>[{flag}]</span></h3>"
+            f"<h4>Picture box</h4>{box_html}"
+            f"<h4>Clip detection</h4>{clip_html}"
+            f"<h4>Registration cross</h4>{cross_html}"
+            f"<h4>Black circle</h4>{circle_html}"
+            f"<h4>Refit benefit</h4>{refit_html}"
+            f"</div>"
+        )
+
+    return f"""
+<section class="geometry">
+  <h2>Geometry</h2>
+  <p class="legend">
+    Picture-in-raster geometry from the SW2 boundary triangles, picture-
+    centered registration cross, and black-ring circle. Active picture box
+    is bounded by the 4 triangle apexes (inferred from their back corners
+    when the apex is clipped). Aspect / aperture / fit_rms surface
+    decoder-side geometry artifacts; clip detection flags overscan or
+    letterboxing.
+  </p>
+  {''.join(panels)}
+</section>
+"""
+
+
 def render_page(captures: List[Dict[str, Any]]) -> str:
     title = f"SW2 Comparison — {len(captures)} captures"
     sections = (
         render_registration_summary(captures)
+        + render_geometry_section(captures)
         + render_tartan_deltas(captures)
         + render_gray_deltas(captures)
         + render_luma_scale_analysis(captures)

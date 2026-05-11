@@ -163,11 +163,129 @@ def test_compare_cli_writes_html(tmp_dir):
     assert "Chart.js" in html or "chart.js" in html  # CDN script reference
 
 
+def _make_capture_json_with_geometry(tag):
+    cap = _make_capture_json(tag)
+    cap["geometry"] = {
+        "fiducials": {
+            "triangles": {
+                "TL": {"back_corner_1": [50, 30], "back_corner_2": [70, 30],
+                       "back_midpoint": [60, 30], "apex_inferred": [60, 3],
+                       "apex_detected": [60, 3], "confidence": 0.95,
+                       "failure_reason": None},
+                "TR": {"back_corner_1": [650, 30], "back_corner_2": [670, 30],
+                       "back_midpoint": [660, 30], "apex_inferred": [660, 3],
+                       "apex_detected": [660, 3], "confidence": 0.94,
+                       "failure_reason": None},
+                "BL": {"back_corner_1": [50, 456], "back_corner_2": [70, 456],
+                       "back_midpoint": [60, 456], "apex_inferred": [60, 483],
+                       "apex_detected": [60, 483], "confidence": 0.93,
+                       "failure_reason": None},
+                "BR": {"back_corner_1": [650, 456], "back_corner_2": [670, 456],
+                       "back_midpoint": [660, 456], "apex_inferred": [660, 483],
+                       "apex_detected": [660, 483], "confidence": 0.94,
+                       "failure_reason": None},
+            },
+            "cross": {"center": [360.0, 243.0],
+                      "h_arm_len_px": 17.0, "v_arm_len_px": 17.0,
+                      "confidence": 0.98},
+            "circle": {"center": [360.0, 243.0], "rx": 242.8, "ry": 243.1,
+                       "rotation_deg": 0.0, "fit_rms": 0.41,
+                       "confidence": 0.97},
+        },
+        "derived": {
+            "active_picture_box": {"top": 3, "left": 60, "bottom": 483, "right": 660},
+            "picture_extent_px": {"width": 600, "height": 480},
+            "picture_offset_from_ideal": {"dx": 60, "dy": 3},
+            "corner_skew_px": {"top_vs_bottom_width_diff": 0.0,
+                                "left_vs_right_height_diff": 0.0},
+            "arrow_tip_coords": {"TL": [60, 3], "TR": [660, 3],
+                                  "BL": [60, 483], "BR": [660, 483]},
+            "clip_detected": {
+                "TL": {"apex_visible": True, "clip_px": 0,
+                       "interpretation": "no clip detected"},
+                "TR": {"apex_visible": True, "clip_px": 0,
+                       "interpretation": "no clip detected"},
+                "BL": {"apex_visible": True, "clip_px": 0,
+                       "interpretation": "no clip detected"},
+                "BR": {"apex_visible": True, "clip_px": 0,
+                       "interpretation": "no clip detected"},
+            },
+            "cross_offset_from_ideal": [0.0, 0.0],
+            "aperture_symmetry": 1.0,
+            "aspect_ratio_check": 0.998,
+            "diameter_vs_picture_height": 1.012,
+            "circle_fit_rms": 0.41,
+        },
+        "registration_refit": {
+            "inlier_count_initial": 11,
+            "inlier_count_final":   20,
+            "final_residuals_px": {"mean": 0.21, "max": 0.55},
+            "anchors_added": ["TL.bc1", "TL.bc2", "TR.bc1", "TR.bc2",
+                              "BL.bc1", "BL.bc2", "BR.bc1", "BR.bc2", "RC"],
+        },
+        "quality_flag":  "ok",
+        "quality_reason": None,
+    }
+    return cap
+
+
+def test_render_geometry_section_includes_picture_box_and_clip_status():
+    a = _make_capture_json_with_geometry("alpha")
+    html = tp_compare.render_geometry_section([a])
+    assert "Geometry" in html
+    # Aperture / aspect panels
+    assert "Aperture" in html or "aperture" in html
+    assert "Aspect" in html or "aspect" in html
+    # Clip status
+    assert "no clip detected" in html or "apex_visible" in html
+    # Refit benefit shows the inlier counts
+    assert "11" in html  # initial
+    assert "20" in html  # final
+
+
+def test_render_geometry_section_shows_clip_when_apex_invisible():
+    a = _make_capture_json_with_geometry("alpha")
+    a["geometry"]["derived"]["clip_detected"]["TL"] = {
+        "apex_visible": False, "clip_px": 3,
+        "interpretation": "top edge clipped ~3 px",
+    }
+    a["geometry"]["derived"]["clip_detected"]["TR"] = {
+        "apex_visible": False, "clip_px": 3,
+        "interpretation": "top edge clipped ~3 px",
+    }
+    html = tp_compare.render_geometry_section([a])
+    assert "top edge clipped" in html
+
+
+def test_render_page_includes_geometry_section():
+    a = _make_capture_json_with_geometry("alpha")
+    b = _make_capture_json_with_geometry("beta")
+    html = tp_compare.render_page([a, b])
+    assert "Geometry" in html
+    # Geometry section appears BEFORE tartan deltas in the page order.
+    g_idx = html.index("Geometry")
+    t_idx = html.index("Tartan Deltas")
+    assert g_idx < t_idx
+
+
+def test_render_geometry_section_handles_missing_block():
+    """Older JSONs without a geometry block must render a placeholder."""
+    a = _make_capture_json("alpha")
+    # Note: _make_capture_json from the existing test file does NOT add a
+    # geometry block, so this exercises the fallback path.
+    html = tp_compare.render_geometry_section([a])
+    assert "older JSON" in html or "no geometry" in html
+
+
 TESTS_NO_TMPDIR = [
     test_render_registration_summary_contains_per_capture_data,
     test_render_tartan_deltas_contains_swatches_and_deltas,
     test_render_gray_deltas_contains_table_and_chart_data,
     test_render_luma_scale_analysis_reports_gain_and_pedestal_residuals,
+    test_render_geometry_section_includes_picture_box_and_clip_status,
+    test_render_geometry_section_shows_clip_when_apex_invisible,
+    test_render_page_includes_geometry_section,
+    test_render_geometry_section_handles_missing_block,
 ]
 TESTS_TMPDIR = [test_compare_cli_writes_html]
 
