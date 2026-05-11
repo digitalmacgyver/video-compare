@@ -278,6 +278,10 @@ code { color: #c5d1e0; }
 .geometry-panel h4 { margin: 8px 0 4px 0; font-size: 12px; color: #c5d1e0; }
 .geo-table { border-collapse: collapse; }
 .geo-table th, .geo-table td { border: 1px solid #2a2e36; padding: 3px 6px; font-size: 12px; }
+.diag-panel { margin: 16px 0; padding: 8px; background: #1d2026; border: 1px solid #2a2e36; }
+.diag-panel h3 { margin: 4px 0 8px 0; font-size: 14px; }
+.diag-img { display: block; max-width: 100%; image-rendering: pixelated; }
+ul.legend { font-size: 12px; color: #b8c0cc; line-height: 1.7; margin: 6px 0 12px 18px; }
 """
 
 
@@ -500,6 +504,60 @@ def render_geometry_section(captures: List[Dict[str, Any]]) -> str:
 """
 
 
+def render_sample_diagnostics(captures: List[Dict[str, Any]]) -> str:
+    """Appendix: per-capture overlay PNG showing where each region was
+    sampled in capture coords. Embeds the PNG as a base64 data URL if a
+    sibling `<json_stem>_overlay.png` exists next to the source JSON.
+
+    Each capture dict may carry a `_source_json_path` attribute set by
+    the CLI; if absent, the section is skipped for that capture.
+    """
+    import base64
+    panels = []
+    for c in captures:
+        src = c.get("_source_json_path")
+        cap_name = _basename(c["_meta"]["capture"])
+        if not src:
+            continue
+        stem = os.path.splitext(src)[0]
+        png_path = stem + "_overlay.png"
+        if not os.path.exists(png_path):
+            panels.append(
+                f"<div class='diag-panel'><h3>{_h.escape(cap_name)}</h3>"
+                f"<p class='muted'>no overlay PNG at {_h.escape(png_path)}</p></div>"
+            )
+            continue
+        with open(png_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        panels.append(
+            f"<div class='diag-panel'>"
+            f"<h3>{_h.escape(cap_name)}</h3>"
+            f"<img class='diag-img' src='data:image/png;base64,{b64}'/>"
+            f"</div>"
+        )
+    if not panels:
+        return ""
+    return f"""
+<section class="diagnostics">
+  <h2>Appendix: Sampling Diagnostics</h2>
+  <p class="legend">
+    Each frame is the actual captured image after raster padding, with
+    overlays at the positions where measurements were taken. Use this
+    to spot-check whether a sample window straddles the wrong chart
+    region (which would explain anomalous deltas in the tables above).
+  </p>
+  <ul class="legend">
+    <li><span style='color:#0ff'>cyan</span> boxes: tartan sample windows (with region ID).</li>
+    <li><span style='color:#ff0'>yellow</span> boxes: gray-step sample windows.</li>
+    <li><span style='color:#f0f'>magenta</span> crosses: grid-landmark expected positions; bright magenta = used in final fit, dim = detected but rejected by RANSAC.</li>
+    <li><span style='color:#0f0'>green</span> crosses: detected Stage 2 fiducials (boundary triangle back corners, registration cross, circle ellipse).</li>
+    <li><span style='color:rgb(255,150,0)'>orange</span> crosses: detected triangle apex (vs the green inferred apex).</li>
+  </ul>
+  {''.join(panels)}
+</section>
+"""
+
+
 def render_page(captures: List[Dict[str, Any]]) -> str:
     title = f"SW2 Comparison — {len(captures)} captures"
     sections = (
@@ -508,6 +566,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_tartan_deltas(captures)
         + render_gray_deltas(captures)
         + render_luma_scale_analysis(captures)
+        + render_sample_diagnostics(captures)
     )
     return f"""<!doctype html>
 <html><head>
@@ -531,7 +590,9 @@ def _main():
     captures = []
     for path in args.inputs:
         with open(path) as f:
-            captures.append(json.load(f))
+            cap = json.load(f)
+        cap["_source_json_path"] = path
+        captures.append(cap)
     html = render_page(captures)
     with open(args.output, "w") as f:
         f.write(html)
