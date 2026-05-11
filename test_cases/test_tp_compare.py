@@ -128,6 +128,11 @@ def test_render_gray_deltas_contains_table_and_chart_data():
     assert "G1" in html and "G4" in html
     assert "-5.2" in html or "-5.20" in html
     assert "-12.8" in html or "-12.80" in html
+    # Per-cell ref/cap swatches (same convention as the tartan section)
+    assert "swatch-ideal" in html
+    assert "swatch-measured" in html
+    assert ">ref<" in html
+    assert ">cap<" in html
     # Chart.js data block
     assert "Chart" in html
     assert "239.2" in html  # ideal Y10 for G1

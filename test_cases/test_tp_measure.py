@@ -159,6 +159,38 @@ def test_measure_end_to_end_zero_deltas(tmp_dir):
         assert abs(patch["delta_yuv10"][0]) < 2.0, patch
     for g in data["grays"]:
         assert abs(g["delta_y10"]) < 1.0, g
+    # The luma_scale block should be present with sensible identity-ish values.
+    assert "luma_scale" in data and data["luma_scale"] is not None
+    ls = data["luma_scale"]
+    for key in ("slope", "intercept", "gain_pct_loss",
+                "predicted_y10_at_black", "predicted_y10_at_white",
+                "rms_linear", "rms_pedestal_a", "rms_pedestal_b"):
+        assert key in ls, key
+    assert abs(ls["slope"] - 1.0) < 0.01
+    assert abs(ls["intercept"]) < 2.0
+    assert ls["rms_linear"] < 2.0
+
+
+def test_fit_gray_ramp_unit_pure_gain_signature():
+    # 9% pure luma gain reduction (snellld-like signature).
+    grays = [
+        {"id": "G1", "ideal_y10": 239.2, "measured_y10": 64 + 0.91 * (239.2 - 64)},
+        {"id": "G2", "ideal_y10": 414.4, "measured_y10": 64 + 0.91 * (414.4 - 64)},
+        {"id": "G3", "ideal_y10": 589.6, "measured_y10": 64 + 0.91 * (589.6 - 64)},
+        {"id": "G4", "ideal_y10": 764.8, "measured_y10": 64 + 0.91 * (764.8 - 64)},
+    ]
+    fit = tp_measure.fit_gray_ramp(grays)
+    assert fit is not None
+    assert abs(fit["slope"] - 0.91) < 0.001
+    assert fit["rms_linear"] < 0.5
+    # Pedestal hypotheses should fit much worse than the linear model.
+    assert fit["rms_pedestal_a"] > 10 * fit["rms_linear"]
+    assert fit["rms_pedestal_b"] > 10 * fit["rms_linear"]
+
+
+def test_fit_gray_ramp_returns_none_on_malformed_input():
+    assert tp_measure.fit_gray_ramp([]) is None
+    assert tp_measure.fit_gray_ramp([{"id": "G1", "ideal_y10": 100, "measured_y10": 100}]) is None
 
 
 def test_measure_end_to_end_dvd_padding(tmp_dir):
@@ -207,6 +239,8 @@ TESTS_NO_TMPDIR = [
     test_sample_region_on_synthesized_identity,
     test_sample_region_with_translation,
     test_pad_to_486_raises_on_oversized_height,
+    test_fit_gray_ramp_unit_pure_gain_signature,
+    test_fit_gray_ramp_returns_none_on_malformed_input,
 ]
 
 

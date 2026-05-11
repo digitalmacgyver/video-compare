@@ -203,6 +203,64 @@ def _ideal_frame_md5() -> str:
     return h.hexdigest()
 
 
+def fit_gray_ramp(grays: list) -> Dict[str, Any]:
+    """Fit measured Y10 = slope * ideal_Y10 + intercept across the 4 gray steps,
+    plus report RMS residuals against two classical NTSC pedestal-mismatch
+    hypotheses. Returns a JSON-serializable dict; or None if input is malformed.
+
+    The pedestal hypotheses assume the chart is the canonical NTSC-M SW2
+    generated with 7.5 IRE setup. The 4 gray boxes are then at
+    {26, 44.5, 62.5, 81} IRE in the analog signal.
+
+      Mode A: decoder ignores setup but signal has it
+              -> Y_meas = 64 + v_IRE/100 * 876
+      Mode B: decoder expects setup but signal has none (PAL/NTSC-J)
+              -> Y_meas = 64 + (v_IRE_no_setup - 7.5)/92.5 * 876
+                 with v_IRE_no_setup in {20, 40, 60, 80}
+    """
+    import math
+    if len(grays) != 4:
+        return None
+    by_id = {g["id"]: g for g in grays}
+    pairs = []
+    for gid in ("G1", "G2", "G3", "G4"):
+        if gid not in by_id:
+            return None
+        g = by_id[gid]
+        pairs.append((g["ideal_y10"], g["measured_y10"]))
+    xs = [p[0] for p in pairs]
+    ys = [p[1] for p in pairs]
+    n = len(xs)
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    num = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
+    den = sum((xs[i] - mx) ** 2 for i in range(n))
+    if den <= 0:
+        return None
+    slope = num / den
+    intercept = my - slope * mx
+    gain_pct_loss = (1.0 - slope) * 100.0
+    pred_black = slope * 64 + intercept
+    pred_white = slope * 940 + intercept
+
+    def _rms(predicted):
+        return math.sqrt(sum((ys[i] - predicted[i]) ** 2 for i in range(n)) / n)
+
+    pred_linear = [slope * xs[i] + intercept for i in range(n)]
+    pred_mode_a = [64 + v / 100.0 * 876 for v in (26, 44.5, 62.5, 81)]
+    pred_mode_b = [64 + (v - 7.5) / 92.5 * 876 for v in (20, 40, 60, 80)]
+    return {
+        "slope": float(slope),
+        "intercept": float(intercept),
+        "gain_pct_loss": float(gain_pct_loss),
+        "predicted_y10_at_black": float(pred_black),
+        "predicted_y10_at_white": float(pred_white),
+        "rms_linear": float(_rms(pred_linear)),
+        "rms_pedestal_a": float(_rms(pred_mode_a)),
+        "rms_pedestal_b": float(_rms(pred_mode_b)),
+    }
+
+
 def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
     Y, U, V, meta = extract_frame(capture_path, frame_index)
     Y_p, U_p, V_p, padding = pad_to_486(Y, U, V)
@@ -254,7 +312,14 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
     meta["tp_chart_version"] = tp_chart.TP_CHART_VERSION
     meta["tool_version"] = _TOOL_VERSION
 
-    return {"_meta": meta, "tartan": tartan, "grays": grays}
+    luma_scale = fit_gray_ramp(grays)
+
+    return {
+        "_meta": meta,
+        "tartan": tartan,
+        "grays": grays,
+        "luma_scale": luma_scale,
+    }
 
 
 def _main():
