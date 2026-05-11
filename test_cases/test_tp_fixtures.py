@@ -44,8 +44,27 @@ def test_fixture_identity_ground_truth_matches_chart_catalog():
     assert cc["radius"] == tp_chart.BLACK_CIRCLE["expected_radius_px"]
 
 
+def test_fixture_shift_updates_ground_truth_and_frame():
+    Y0, _, _, gt0 = tp_fixtures.synthesize_with_ground_truth()
+    Y, U, V, gt = tp_fixtures.synthesize_with_ground_truth(shift=(5, 7))
+    # Pick whichever L1 lives at — its ground truth must shift by (5,7).
+    l1_orig = gt0["grid_intersections"]["L1"]
+    assert gt["grid_intersections"]["L1"] == (l1_orig[0] + 5, l1_orig[1] + 7)
+    # The pixel at the new position should be black (grid intersection).
+    nx, ny = gt["grid_intersections"]["L1"]
+    assert Y[ny, nx] == tp_chart.BLACK_Y10
+    # Triangle TL back corner shifted by (5, 7).
+    tl_orig = gt0["triangles"]["TL"]["back_corner_1"]
+    assert gt["triangles"]["TL"]["back_corner_1"] == (tl_orig[0] + 5, tl_orig[1] + 7)
+    # First 7 rows are the grey-background fill from the shift.
+    assert (Y[:7, :] == tp_chart.GREY_BACKGROUND_Y10).all()
+    # First 5 columns are the grey-background fill.
+    assert (Y[:, :5] == tp_chart.GREY_BACKGROUND_Y10).all()
+
+
 TESTS = [
     test_fixture_identity_ground_truth_matches_chart_catalog,
+    test_fixture_shift_updates_ground_truth_and_frame,
 ]
 
 
