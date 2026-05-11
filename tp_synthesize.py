@@ -2,7 +2,9 @@
 """Synthesize the ideal SW2 NTSC test pattern frame at 720x486.
 
 Stage 1 scope: grey background, black main grid, top-left tartan (4x2),
-4-step gray strip below it, and a placeholder boundary-triangle cell.
+4-step gray strip below it.
+Stage 2 adds: all 4 boundary triangles, the registration cross, and the
+black circle.
 
 Library entry point:
     Y, U, V = tp_synthesize.synthesize(720, 486)
@@ -89,22 +91,27 @@ def _draw_gray_strip(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> None:
         _fill_box_yuv422(Y, U, V, r["ideal_box"], e["y10"], e["u10"], e["v10"])
 
 
-def _draw_boundary_triangle_upper_left(Y: np.ndarray) -> None:
-    """Black filled triangle inside the (0..30, 81..108) cell, pointing right.
+def _fill_triangle_y(Y: np.ndarray, p1, p2, p3, y10: int = None) -> None:
+    """Fill a triangle on the Y plane only (chroma not affected — boundary
+    triangles are black on the chroma-center-grey background).
 
-    For Stage 1 we render only the upper-left boundary-triangle cell; the
-    other three corners are added in Stage 2 along with their detectors.
-    The shape is a simple right-pointing triangle, vertices roughly:
-       (3, 84)  top-left
-       (3, 105) bottom-left
-       (24, 94) right tip
-    Drawn by filling row-by-row.
-    """
-    for r in range(84, 106):
-        # Distance from the apex row 94 (range 0..11)
-        d = abs(r - 94)
-        x_right = max(4, 24 - int(round(21 * d / 11)))
-        Y[r, 3:x_right] = tp_chart.BLACK_Y10
+    Uses cv2.fillPoly which handles the geometry. p1/p2/p3 are (x, y)
+    integer coords."""
+    import cv2
+    if y10 is None:
+        y10 = tp_chart.BLACK_Y10
+    pts = np.array([[p1, p2, p3]], dtype=np.int32)
+    cv2.fillPoly(Y, pts, int(y10))
+
+
+def _draw_boundary_triangles(Y: np.ndarray) -> None:
+    """Render all 4 boundary triangles from tp_chart.BOUNDARY_TRIANGLES."""
+    for tri in tp_chart.BOUNDARY_TRIANGLES:
+        bc1 = tuple(int(v) for v in tri["ideal_back_corner_1"])
+        bc2 = tuple(int(v) for v in tri["ideal_back_corner_2"])
+        apex = tuple(int(v) for v in tri["ideal_apex"])
+        # cv2.fillPoly handles out-of-frame apex coords (clips them).
+        _fill_triangle_y(Y, bc1, bc2, apex)
 
 
 def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -115,7 +122,7 @@ def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndar
     _draw_grid(Y)
     _draw_tartan(Y, U, V)
     _draw_gray_strip(Y, U, V)
-    _draw_boundary_triangle_upper_left(Y)
+    _draw_boundary_triangles(Y)
     return Y, U, V
 
 

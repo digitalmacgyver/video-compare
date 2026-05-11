@@ -89,17 +89,42 @@ def test_synthesize_gray_strip_centers():
         )
 
 
-def test_synthesize_boundary_triangle_present():
-    Y, U, V = tp_synthesize.synthesize(720, 486)
-    # Boundary-triangle cell is the 30x27 box at x in [0,30), y in [81,108).
+
+def test_synthesize_renders_all_four_boundary_triangles():
+    Y, _, _ = tp_synthesize.synthesize(720, 486)
+    for tri in tp_chart.BOUNDARY_TRIANGLES:
+        bm = tri["ideal_back_midpoint"]
+        apex = tri["ideal_apex"]
+        # The back midpoint and apex (clamped to inside the frame) must be black.
+        assert Y[int(bm[1]), int(bm[0])] == tp_chart.BLACK_Y10, \
+            f"back midpoint of {tri['id']} not black"
+        ax, ay = int(apex[0]), max(0, min(485, int(apex[1])))
+        assert Y[ay, ax] == tp_chart.BLACK_Y10, f"apex of {tri['id']} not black"
+
+
+def test_synthesize_back_corners_of_each_triangle_are_black():
+    Y, _, _ = tp_synthesize.synthesize(720, 486)
+    for tri in tp_chart.BOUNDARY_TRIANGLES:
+        for corner_key in ("ideal_back_corner_1", "ideal_back_corner_2"):
+            cx, cy = tri[corner_key]
+            assert Y[int(cy), int(cx)] == tp_chart.BLACK_Y10, \
+                f"{tri['id']}.{corner_key} not black at ({cx},{cy})"
+
+
+def test_synthesize_old_placeholder_cell_no_longer_triangle():
+    """The Stage 1 placeholder lived at Y[81:108, 0:30] and was a filled
+    triangle with ~200 dark pixels. The Stage 2 synthesizer no longer
+    draws there; only the grid lines passing through that cell remain.
+    """
+    Y, _, _ = tp_synthesize.synthesize(720, 486)
     cell = Y[81:108, 0:30]
-    # Should contain a meaningful chunk of black pixels (the triangle interior).
-    # Grid lines alone contribute ~82 px; the filled triangle adds ~200 more.
     black_count = int((cell == tp_chart.BLACK_Y10).sum())
-    assert black_count > 150, (
-        f"boundary-triangle cell has only {black_count} black pixels "
-        f"(out of {cell.size}); expected triangle interior (>150)"
-    )
+    # Only the y=108 grid line (3 px tall, full 30 wide = 90 px) + the x=0
+    # grid line (54 px tall, 3 wide minus overlap with the y=108 line) ≈
+    # 90 + ~75 - overlap = ~155 dark pixels at most. The old triangle filled
+    # ~330 dark pixels. So < 200 means no triangle.
+    assert black_count < 200, \
+        f"old placeholder cell still has {black_count} black pixels"
 
 
 def test_cli_writes_png(tmp_dir):
@@ -159,7 +184,9 @@ TESTS_NO_TMPDIR = [
     test_synthesize_grid_intersections_dark,
     test_synthesize_tartan_centers,
     test_synthesize_gray_strip_centers,
-    test_synthesize_boundary_triangle_present,
+    test_synthesize_renders_all_four_boundary_triangles,
+    test_synthesize_back_corners_of_each_triangle_are_black,
+    test_synthesize_old_placeholder_cell_no_longer_triangle,
     test_fill_box_rejects_odd_x,
     test_fill_box_rejects_odd_w,
 ]
