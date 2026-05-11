@@ -175,6 +175,24 @@ GRAY_REGIONS = _build_gray_regions()
 
 
 # =====================================================================
+# IDEAL PICTURE BOX
+# =====================================================================
+#
+# Active picture extent in ideal 720x486 coords (full SDI raster). Used by
+# detect_geometry to compare the apex-derived active picture box (in
+# capture coords) against where the chart's ideal active picture would
+# appear in capture coords after the final affine.
+
+IDEAL_PICTURE_BOX = {"left": 0, "top": 0, "right": 719, "bottom": 485}
+IDEAL_PICTURE_BOX_CORNERS = [
+    (IDEAL_PICTURE_BOX["left"],  IDEAL_PICTURE_BOX["top"]),     # TL
+    (IDEAL_PICTURE_BOX["right"], IDEAL_PICTURE_BOX["top"]),     # TR
+    (IDEAL_PICTURE_BOX["left"],  IDEAL_PICTURE_BOX["bottom"]),  # BL
+    (IDEAL_PICTURE_BOX["right"], IDEAL_PICTURE_BOX["bottom"]),  # BR
+]
+
+
+# =====================================================================
 # REGISTRATION LANDMARK CATALOG
 # =====================================================================
 #

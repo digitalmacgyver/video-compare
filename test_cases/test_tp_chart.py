@@ -141,6 +141,14 @@ def test_grid_landmark_distribution():
     assert xs == [180, 360, 420, 540, 600], xs
 
 
+def test_ideal_picture_box():
+    box = tp_chart.IDEAL_PICTURE_BOX
+    assert box == {"left": 0, "top": 0, "right": 719, "bottom": 485}
+    corners = tp_chart.IDEAL_PICTURE_BOX_CORNERS
+    # TL, TR, BL, BR
+    assert corners == [(0, 0), (719, 0), (0, 485), (719, 485)]
+
+
 TESTS = [
     test_constants_exist,
     test_rgb_norm_to_yuv10_black,
@@ -155,6 +163,7 @@ TESTS = [
     test_gray_regions,
     test_grid_landmarks,
     test_grid_landmark_distribution,
+    test_ideal_picture_box,
 ]
 
 
