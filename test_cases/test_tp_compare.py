@@ -63,8 +63,49 @@ def test_render_tartan_deltas_contains_swatches_and_deltas():
     html = tp_compare.render_tartan_deltas([a, b])
     assert "YEL" in html
     assert "-50" in html or "-50.0" in html
-    # Should include an inline-style swatch background-color (rgb)
+    # Inline swatch background-color
     assert "background-color: rgb(" in html or "background:rgb(" in html
+    # Per-swatch role labels and CSS classes
+    assert "swatch-ideal" in html
+    assert "swatch-measured" in html
+    assert ">ref<" in html
+    assert ">cap<" in html
+
+
+def test_render_luma_scale_analysis_reports_gain_and_pedestal_residuals():
+    # Capture A: nearly-perfect (linear residual near zero, gain ~ 1.0)
+    a = _make_capture_json("alpha")
+    a["grays"] = [
+        {"id": "G1", "ideal_y10": 239.2, "measured_y10": 239.0, "delta_y10": -0.2,
+         "u10": 512.0, "v10": 512.0, "patch_size_px": [6, 6], "name": "gray_step_20"},
+        {"id": "G2", "ideal_y10": 414.4, "measured_y10": 414.0, "delta_y10": -0.4,
+         "u10": 512.0, "v10": 512.0, "patch_size_px": [6, 6], "name": "gray_step_40"},
+        {"id": "G3", "ideal_y10": 589.6, "measured_y10": 589.2, "delta_y10": -0.4,
+         "u10": 512.0, "v10": 512.0, "patch_size_px": [6, 6], "name": "gray_step_60"},
+        {"id": "G4", "ideal_y10": 764.8, "measured_y10": 764.0, "delta_y10": -0.8,
+         "u10": 512.0, "v10": 512.0, "patch_size_px": [6, 6], "name": "gray_step_80"},
+    ]
+    # Capture B: ~9% luma compression (snellld-like signature)
+    b = _make_capture_json("beta")
+    b["grays"] = [
+        {"id": "G1", "ideal_y10": 239.2, "measured_y10": 220.0, "delta_y10": -19.2,
+         "u10": 512.0, "v10": 512.0, "patch_size_px": [6, 6], "name": "gray_step_20"},
+        {"id": "G2", "ideal_y10": 414.4, "measured_y10": 379.0, "delta_y10": -35.4,
+         "u10": 512.0, "v10": 512.0, "patch_size_px": [6, 6], "name": "gray_step_40"},
+        {"id": "G3", "ideal_y10": 589.6, "measured_y10": 538.0, "delta_y10": -51.6,
+         "u10": 512.0, "v10": 512.0, "patch_size_px": [6, 6], "name": "gray_step_60"},
+        {"id": "G4", "ideal_y10": 764.8, "measured_y10": 698.0, "delta_y10": -66.8,
+         "u10": 512.0, "v10": 512.0, "patch_size_px": [6, 6], "name": "gray_step_80"},
+    ]
+    html = tp_compare.render_luma_scale_analysis([a, b])
+    assert "Luma Scale Analysis" in html
+    assert "Slope" in html and "Intercept" in html
+    assert "alpha.mov" in html and "beta.mov" in html
+    # Verdict text differs for the two captures
+    assert "essentially correct" in html
+    assert "luma gain" in html
+    # Pedestal hypothesis residuals are reported
+    assert "Pedestal" in html
 
 
 def test_render_gray_deltas_contains_table_and_chart_data():
@@ -121,6 +162,7 @@ TESTS_NO_TMPDIR = [
     test_render_registration_summary_contains_per_capture_data,
     test_render_tartan_deltas_contains_swatches_and_deltas,
     test_render_gray_deltas_contains_table_and_chart_data,
+    test_render_luma_scale_analysis_reports_gain_and_pedestal_residuals,
 ]
 TESTS_TMPDIR = [test_compare_cli_writes_html]
 

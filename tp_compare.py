@@ -72,9 +72,15 @@ def render_registration_summary(captures: List[Dict[str, Any]]) -> str:
 """
 
 
-def _swatch(rgb_tuple) -> str:
+def _swatch(rgb_tuple, role: str) -> str:
+    """role is 'ideal' or 'measured' — drives styling and the hover tooltip."""
     r, g, b = rgb_tuple
-    return f"<span class='swatch' style='background-color: rgb({r},{g},{b});'></span>"
+    label = "ideal" if role == "ideal" else "measured"
+    return (
+        f"<span class='swatch swatch-{role}' "
+        f"style='background-color: rgb({r},{g},{b});' "
+        f"title='{label} RGB ({r},{g},{b})'></span>"
+    )
 
 
 def _delta_class(d: float) -> str:
@@ -110,7 +116,12 @@ def render_tartan_deltas(captures: List[Dict[str, Any]]) -> str:
             cls = _delta_class(dy)
             cells.append(
                 f"<td class='{cls}'>"
-                f"{_swatch(ideal_rgb)}{_swatch(meas_rgb)}"
+                f"<div class='swatch-pair'>"
+                f"<div class='swatch-cell'>{_swatch(ideal_rgb, 'ideal')}"
+                f"<div class='swatch-label'>ref</div></div>"
+                f"<div class='swatch-cell'>{_swatch(meas_rgb, 'measured')}"
+                f"<div class='swatch-label'>cap</div></div>"
+                f"</div>"
                 f"<div class='delta'>"
                 f"&Delta;Y={dy:+.1f}<br>"
                 f"&Delta;U={du:+.1f}<br>"
@@ -123,7 +134,14 @@ def render_tartan_deltas(captures: List[Dict[str, Any]]) -> str:
     return f"""
 <section class="tartan">
   <h2>Tartan Deltas (measured vs ideal)</h2>
-  <p>Each cell shows ideal swatch | measured swatch and the YUV10 deltas.</p>
+  <p class="legend">
+    Each cell:
+    <span class='swatch swatch-ideal' style='background:#888;'></span>&nbsp;<b>ref</b>
+    (synthesized ideal from Rec.601 math, dashed border)&nbsp;&nbsp;
+    <span class='swatch swatch-measured' style='background:#888;'></span>&nbsp;<b>cap</b>
+    (sampled from the capture)
+    &nbsp;&nbsp;then the YUV10 deltas of capture vs ref.
+  </p>
   <table class="data tartan-table">
     <thead>{head}</thead>
     <tbody>
@@ -215,10 +233,16 @@ _CSS = """
 body { background: #181a1f; color: #d8dde6; font-family: system-ui, sans-serif; margin: 24px; }
 h1 { color: #fff; }
 h2 { color: #fff; border-bottom: 1px solid #2a2e36; padding-bottom: 4px; }
+p.legend { font-size: 12px; color: #b8c0cc; line-height: 1.6; }
 table.data { border-collapse: collapse; margin: 12px 0; }
 table.data th, table.data td { border: 1px solid #2a2e36; padding: 6px 10px; vertical-align: top; }
 table.data th { background: #21252b; color: #fff; }
-.swatch { display: inline-block; width: 18px; height: 18px; border: 1px solid #444; margin-right: 4px; vertical-align: middle; }
+.swatch { display: inline-block; width: 22px; height: 22px; vertical-align: middle; }
+.swatch-ideal    { border: 2px dashed #c5d1e0; box-sizing: border-box; }
+.swatch-measured { border: 2px solid  #f0b450; box-sizing: border-box; }
+.swatch-pair   { display: flex; gap: 4px; }
+.swatch-cell   { display: flex; flex-direction: column; align-items: center; }
+.swatch-label  { font-size: 9px; color: #b8c0cc; line-height: 1.2; margin-top: 1px; }
 .delta { font-size: 11px; margin-top: 4px; color: #b8c0cc; }
 .delta-good { background: rgba(80,200,120,0.10); }
 .delta-warn { background: rgba(240,180,80,0.15); }
@@ -227,7 +251,136 @@ table.data th { background: #21252b; color: #fff; }
 .warn { color: #f0b450; font-weight: 600; }
 .bad  { color: #e26464; font-weight: 600; }
 .small { font-size: 11px; color: #b8c0cc; }
+.muted { color: #8a929f; }
 code { color: #c5d1e0; }
+"""
+
+
+def _fit_gray_ramp(c: Dict[str, Any]):
+    """Linear-fit measured Y10 vs ideal Y10 for the 4 gray steps.
+
+    Returns (slope, intercept, gain_pct_loss, predicted_at_black, predicted_at_white,
+    rms_residual, pedestal_a_rms, pedestal_b_rms) or None if data missing.
+
+    Pedestal hypotheses (test against the same measured data):
+      A: decoder assumes no setup; signal has 7.5 IRE setup
+         -> predicts Y_meas = 64 + v_IRE/100 * 876 where v_IRE is the chart's
+            analog IRE (26, 44.5, 62.5, 81 for the 4 steps)
+      B: decoder assumes 7.5 IRE setup; signal has none (PAL/NTSC-J source)
+         -> predicts Y_meas = 64 + (v_IRE_no_setup - 7.5)/92.5 * 876 where
+            v_IRE_no_setup is 20, 40, 60, 80
+    """
+    import math
+    grays = c.get("grays") or []
+    if len(grays) != 4:
+        return None
+    by_id = {g["id"]: g for g in grays}
+    pairs = []
+    for gid in ("G1", "G2", "G3", "G4"):
+        if gid not in by_id:
+            return None
+        g = by_id[gid]
+        pairs.append((g["ideal_y10"], g["measured_y10"]))
+    xs = [p[0] for p in pairs]
+    ys = [p[1] for p in pairs]
+    n = len(xs)
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    num = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
+    den = sum((xs[i] - mx) ** 2 for i in range(n))
+    slope = num / den if den > 0 else float("nan")
+    intercept = my - slope * mx
+    gain_pct_loss = (1 - slope) * 100.0
+    pred_black = slope * 64 + intercept
+    pred_white = slope * 940 + intercept
+
+    def _rms(predicted):
+        return math.sqrt(sum((ys[i] - predicted[i]) ** 2 for i in range(n)) / n)
+
+    pred_linear = [slope * xs[i] + intercept for i in range(n)]
+    pred_mode_a = [64 + v / 100 * 876 for v in (26, 44.5, 62.5, 81)]
+    pred_mode_b = [64 + (v - 7.5) / 92.5 * 876 for v in (20, 40, 60, 80)]
+    return {
+        "slope": slope,
+        "intercept": intercept,
+        "gain_pct_loss": gain_pct_loss,
+        "pred_at_black": pred_black,
+        "pred_at_white": pred_white,
+        "rms_linear": _rms(pred_linear),
+        "rms_pedestal_a": _rms(pred_mode_a),
+        "rms_pedestal_b": _rms(pred_mode_b),
+    }
+
+
+def render_luma_scale_analysis(captures: List[Dict[str, Any]]) -> str:
+    rows = []
+    for c in captures:
+        fit = _fit_gray_ramp(c)
+        cap_name = _basename(c["_meta"]["capture"])
+        if fit is None:
+            rows.append(
+                f"<tr><td>{_h.escape(cap_name)}</td>"
+                f"<td colspan='7' class='muted'>insufficient gray data</td></tr>"
+            )
+            continue
+        # Pick the best-fitting hypothesis to surface in the verdict cell.
+        rms = {
+            "linear gain": fit["rms_linear"],
+            "pedestal A (no-setup decoder, signal has setup)": fit["rms_pedestal_a"],
+            "pedestal B (setup-decoder, signal has none)": fit["rms_pedestal_b"],
+        }
+        best = min(rms, key=rms.get)
+        # Verdict text
+        if fit["rms_linear"] < 2.0 and abs(fit["gain_pct_loss"]) < 1.0:
+            verdict = "<span class='ok'>essentially correct</span>"
+        elif best.startswith("linear"):
+            verdict = (
+                f"<span class='warn'>luma gain {fit['gain_pct_loss']:+.1f}%</span>"
+                f"<div class='small'>black ≈ correct, white compressed</div>"
+            )
+        else:
+            verdict = f"<span class='bad'>pedestal issue: {best}</span>"
+        rows.append(
+            f"<tr>"
+            f"<td>{_h.escape(cap_name)}</td>"
+            f"<td>{fit['slope']:.4f}</td>"
+            f"<td>{fit['intercept']:+.2f}</td>"
+            f"<td>{fit['pred_at_black']:+.1f}<div class='small muted'>vs 64</div></td>"
+            f"<td>{fit['pred_at_white']:+.1f}<div class='small muted'>vs 940</div></td>"
+            f"<td>{fit['rms_linear']:.2f}</td>"
+            f"<td class='muted'>{fit['rms_pedestal_a']:.1f} / {fit['rms_pedestal_b']:.1f}</td>"
+            f"<td>{verdict}</td>"
+            f"</tr>"
+        )
+    return f"""
+<section class="luma">
+  <h2>Luma Scale Analysis</h2>
+  <p class="legend">
+    Linear fit of measured Y10 against ideal Y10 across the 4 gray steps:
+    <code>Y_meas = slope · Y_ideal + intercept</code>.
+    A pure luma-gain error gives slope ≠ 1 with intercept near 0.
+    A classical NTSC pedestal mismatch would instead produce large residuals
+    against the linear model and a closer match to one of the pedestal hypotheses
+    — these residuals are reported alongside for comparison.
+  </p>
+  <table class="data luma-table">
+    <thead>
+      <tr>
+        <th>Capture</th>
+        <th>Slope</th>
+        <th>Intercept</th>
+        <th>Predicted at black (Y10=64)</th>
+        <th>Predicted at white (Y10=940)</th>
+        <th>Linear-fit RMS</th>
+        <th>Pedestal&nbsp;A / B RMS</th>
+        <th>Verdict</th>
+      </tr>
+    </thead>
+    <tbody>
+{''.join(rows)}
+    </tbody>
+  </table>
+</section>
 """
 
 
@@ -237,6 +390,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         render_registration_summary(captures)
         + render_tartan_deltas(captures)
         + render_gray_deltas(captures)
+        + render_luma_scale_analysis(captures)
     )
     return f"""<!doctype html>
 <html><head>
