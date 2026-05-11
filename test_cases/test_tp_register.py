@@ -17,15 +17,11 @@ def approx(a, b, tol):
 
 def test_detect_landmark_on_synthesized_ideal():
     Y, _, _ = tp_synthesize.synthesize(720, 486)
-    # Synthesizer draws the grid at canonical (60*c, 54*r) positions. Where
-    # the catalog stores a real-chart-calibrated nudge (e.g. L3 at (478, 110)
-    # vs the canonical (480, 108)) the detector finds the synthesizer's
-    # actual position, not the catalog's stated ideal. Compare against the
-    # nearest canonical grid intersection.
-    # Tolerance 1.8 px accommodates two known biases: (a) the L3 calibration
-    # offset that the synthesizer doesn't replicate, and (b) the big circle
-    # arc clipping the bottom-left corner of L13's search window with anti-
-    # aliased pixels.
+    # Synthesizer draws the grid at canonical (60*c, 54*r) positions; the
+    # catalog ideal_x/ideal_y match those for the current catalog. The big
+    # circle's lower arc clips the bottom-left of L13's 24-px search window
+    # with antialiased pixels, biasing the projection centroid by ~1.3 px.
+    # Tolerance 1.8 px accommodates that case.
     for lm in tp_chart.GRID_LANDMARKS:
         result = tp_register.detect_landmark(
             Y, lm["ideal_x"], lm["ideal_y"], lm["search_window_px"],
@@ -96,9 +92,8 @@ def test_register_identity_on_synthesized_ideal():
     np.testing.assert_allclose(result["affine_matrix"], [[1, 0, 0], [0, 1, 0]], atol=0.5)
     assert result["residuals_px"]["mean"] < 0.6
     assert result["quality_flag"] == "ok"
-    # L3 (off-grid catalog) and L13 (circle-arc bias on synthesized chart)
-    # are expected RANSAC outliers; the remaining 7 of 9 landmarks must
-    # survive as inliers.
+    # L13 (circle-arc antialiasing bias) is an expected RANSAC outlier on the
+    # synthesized chart; at most 2 of N may be rejected.
     assert result["inliers"] >= len(tp_chart.GRID_LANDMARKS) - 2
 
 

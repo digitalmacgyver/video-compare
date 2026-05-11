@@ -113,11 +113,12 @@ def test_gray_regions():
 
 def test_grid_landmarks():
     lms = tp_chart.GRID_LANDMARKS
-    # Refreshed May 2026 against operator chart-layout review: 9 anchors at
+    # Refreshed May 2026 against operator chart-layout review: 11 anchors at
     # intersections clear of the moving zone plate, the SW2/NTSC merged-text
     # box, and the chart features that would confound projection-detection.
-    assert len(lms) == 9, f"expected 9 anchors, got {len(lms)}"
-    expected_ids = ["L1", "L3", "L4", "L7", "L9", "L10", "L12", "L13", "L14"]
+    assert len(lms) == 11, f"expected 11 anchors, got {len(lms)}"
+    expected_ids = ["L1", "L3", "L4", "L7", "L9", "L10", "L12",
+                    "L13", "L14", "L15", "L16"]
     assert [lm["id"] for lm in lms] == expected_ids
     for lm in lms:
         assert lm["kind"] == "grid_intersection"
@@ -134,14 +135,13 @@ def test_grid_landmark_distribution():
     # only 12 px into adjacent cells, and the actual moving pattern stays
     # well inside its container.
     for lm in tp_chart.GRID_LANDMARKS:
-        assert 108 <= lm["ideal_y"] <= 432, lm
+        assert 54 <= lm["ideal_y"] <= 432, lm
         assert 60 <= lm["ideal_x"] <= 660, lm
-    # Distinct y-rows present (sorted). L3 is at y=110 (calibrated 2 px below
-    # the canonical 108 to match real chart geometry).
+    # Distinct y-rows present (sorted).
     ys = sorted({lm["ideal_y"] for lm in tp_chart.GRID_LANDMARKS})
-    assert ys == [108, 110, 162, 216, 270, 378], ys
+    assert ys == [54, 108, 162, 216, 270, 378], ys
     xs = sorted({lm["ideal_x"] for lm in tp_chart.GRID_LANDMARKS})
-    assert xs == [180, 240, 478, 540], xs
+    assert xs == [180, 240, 480, 540], xs
 
 
 def test_ideal_picture_box():

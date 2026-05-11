@@ -286,6 +286,9 @@ code { color: #c5d1e0; }
 .diag-zoom-container:focus { outline: 1px solid #61c08f; }
 .diag-img { display: block; max-width: none; transform-origin: 0 0; image-rendering: pixelated;
     user-select: none; -webkit-user-drag: none; }
+.diag-coord-readout { position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,0.75);
+    color: #fff; padding: 2px 8px; font-family: monospace; font-size: 12px;
+    pointer-events: none; border-radius: 3px; }
 kbd { background: #2a2e36; padding: 1px 6px; border-radius: 3px; font-family: monospace;
     font-size: 11px; border: 1px solid #3a3e46; }
 ul.legend { font-size: 12px; color: #b8c0cc; line-height: 1.7; margin: 6px 0 12px 18px; }
@@ -542,6 +545,7 @@ def render_sample_diagnostics(captures: List[Dict[str, Any]]) -> str:
             f"<span class='diag-zoom-readout'></span></h3>"
             f"<div class='diag-zoom-container' tabindex='0'>"
             f"<img class='diag-img' src='data:image/png;base64,{b64}' draggable='false'/>"
+            f"<div class='diag-coord-readout'>(–, –)</div>"
             f"</div>"
             f"</div>"
         )
@@ -573,6 +577,7 @@ def render_sample_diagnostics(captures: List[Dict[str, Any]]) -> str:
     function initZoom(container) {{
         var img = container.querySelector('.diag-img');
         var readout = container.parentElement.querySelector('.diag-zoom-readout');
+        var coordReadout = container.querySelector('.diag-coord-readout');
         var scale = 1, tx = 0, ty = 0;
         var panning = false, lastX = 0, lastY = 0;
         function apply() {{
@@ -580,6 +585,20 @@ def render_sample_diagnostics(captures: List[Dict[str, Any]]) -> str:
             if (readout) readout.textContent = '[zoom ' + scale.toFixed(2) + 'x]';
         }}
         function reset() {{ scale = 1; tx = 0; ty = 0; apply(); }}
+        function updateCoord(e) {{
+            if (!coordReadout) return;
+            var rect = container.getBoundingClientRect();
+            var mx = e.clientX - rect.left;
+            var my = e.clientY - rect.top;
+            // Inverse of: container_x = image_x * scale + tx
+            var imgX = (mx - tx) / scale;
+            var imgY = (my - ty) / scale;
+            if (imgX >= 0 && imgX < img.naturalWidth && imgY >= 0 && imgY < img.naturalHeight) {{
+                coordReadout.textContent = '(' + Math.round(imgX) + ', ' + Math.round(imgY) + ')';
+            }} else {{
+                coordReadout.textContent = '(–, –)';
+            }}
+        }}
         container.addEventListener('wheel', function(e) {{
             e.preventDefault();
             var rect = container.getBoundingClientRect();
@@ -599,11 +618,16 @@ def render_sample_diagnostics(captures: List[Dict[str, Any]]) -> str:
             e.preventDefault();
         }});
         window.addEventListener('mousemove', function(e) {{
-            if (!panning) return;
-            tx += e.clientX - lastX;
-            ty += e.clientY - lastY;
-            lastX = e.clientX; lastY = e.clientY;
-            apply();
+            if (panning) {{
+                tx += e.clientX - lastX;
+                ty += e.clientY - lastY;
+                lastX = e.clientX; lastY = e.clientY;
+                apply();
+            }}
+        }});
+        container.addEventListener('mousemove', updateCoord);
+        container.addEventListener('mouseleave', function() {{
+            if (coordReadout) coordReadout.textContent = '(–, –)';
         }});
         window.addEventListener('mouseup', function() {{
             if (panning) {{ panning = false; container.style.cursor = 'grab'; }}

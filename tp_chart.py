@@ -224,16 +224,17 @@ _LANDMARK_GRID = [
     #   L8  (360, 216), L11 (420, 270): all sit inside the moving zone-plate
     #                   reserved area (cells (3,4)–(6,9)) where the chart
     #                   pattern is non-deterministic per frame.
-    # Adjusted:
-    #   L3: 2 px down + 2 px left to match the actual chart's intersection.
     # Added:
     #   L13, L14 at (180, 378) and (540, 378) — shared corners of empty /
     #   circle-only cells just below the zone plate and above the S&W banner.
-    # Remaining anchors (L1, L4, L7, L9, L10, L12) are reported by the
-    # operator to sit within 1–2 px of the actual intersection; further
-    # nudges pending operator review.
+    #   L15, L16 at (180, 54) and (540, 54) — top-row anchors near the gray
+    #   strip / upper-left composite, intended to constrain the affine close
+    #   to the y≈46 gray-strip sample row and prevent extrapolation drift.
+    # Note: intersection points are 2x2-px dark regions (grid lines are 2 px
+    # wide w/ ~1 px antialias falloff), so detected positions can land on
+    # any of the 4 corner pixels — operator-observed ±1 px wobble is expected.
     ("L1",  240, 108),
-    ("L3",  478, 110),
+    ("L3",  480, 108),
     ("L4",  180, 162),
     ("L7",  180, 216),
     ("L9",  540, 216),
@@ -241,6 +242,8 @@ _LANDMARK_GRID = [
     ("L12", 540, 270),
     ("L13", 180, 378),
     ("L14", 540, 378),
+    ("L15", 180,  54),
+    ("L16", 540,  54),
 ]
 
 GRID_LANDMARKS = [
