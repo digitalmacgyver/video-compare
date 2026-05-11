@@ -55,6 +55,22 @@ _PRESETS: Dict[str, List[str]] = {
         "G1", "G2", "G3", "G4",
         "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8",
     ],
+    "stage2-fiducials": [
+        # 4 triangles, each with back-corner-1, back-corner-2, apex.
+        "TL_back_corner_1", "TL_back_corner_2", "TL_apex",
+        "TR_back_corner_1", "TR_back_corner_2", "TR_apex",
+        "BL_back_corner_1", "BL_back_corner_2", "BL_apex",
+        "BR_back_corner_1", "BR_back_corner_2", "BR_apex",
+        # Registration cross center.
+        "RC_center",
+        # Black circle ring sample points (12, 3, 6, 9 o'clock).
+        "BC_north", "BC_east", "BC_south", "BC_west",
+    ],
+    "stage2-landmarks": [
+        # Updated 12-anchor grid catalog (Stage 2).
+        "L1", "L2", "L3", "L4", "L5", "L6",
+        "L7", "L8", "L9", "L10", "L11", "L12",
+    ],
 }
 
 
