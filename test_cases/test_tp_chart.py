@@ -188,8 +188,9 @@ def test_registration_cross_catalog():
     rc = tp_chart.REGISTRATION_CROSS
     assert rc["id"] == "RC"
     assert rc["kind"] == "registration_cross"
-    assert rc["ideal_x"] == 360
-    assert rc["ideal_y"] == 243
+    # Cross lives in cell (1,11) — upper-right composite region.
+    assert rc["ideal_x"] == 630
+    assert rc["ideal_y"] == 27
     assert rc["ideal_arm_len_px"] == 17
     assert rc["ideal_arm_thickness_px"] == 3
     assert rc["box_size_px"] == 24

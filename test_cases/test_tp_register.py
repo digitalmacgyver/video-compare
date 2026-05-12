@@ -266,12 +266,16 @@ def test_detect_geometry_returns_full_block_on_clean_fixture():
     assert "derived" in geom
     tris = geom["fiducials"]["triangles"]
     assert set(tris.keys()) == {"TL", "TR", "BL", "BR"}
-    # Derived box close to apex positions: TL/TR apex y≈3, BL/BR apex y≈482.
+    # Derived box from apex_inferred positions: TL/TR apex y≈3, BL/BR apex
+    # y≈482. TL/BL apex x=180; TR apex x=540; BR apex x=480 (chart spec
+    # is asymmetric on the bottom edge).
     box = geom["derived"]["active_picture_box"]
     assert abs(box["top"] - 3.0) < 1.5
     assert abs(box["bottom"] - 482.0) < 1.5
-    assert abs(box["left"] - 60.0) < 1.5
-    assert abs(box["right"] - 660.0) < 1.5
+    # left = mean(TL.x, BL.x) = mean(180, 180) = 180
+    assert abs(box["left"] - 180.0) < 1.5
+    # right = mean(TR.x, BR.x) = mean(540, 480) = 510
+    assert abs(box["right"] - 510.0) < 1.5
     # Aspect check near 1.0 (square circle).
     assert abs(geom["derived"]["aspect_ratio_check"] - 1.0) < 0.005
     # Aperture symmetry near 1.0 (cross is symmetric).

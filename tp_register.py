@@ -105,8 +105,12 @@ def _detect_boundary_triangle(Y, fid):
     offset = (ideal_apex[0] - ideal_bm[0], ideal_apex[1] - ideal_bm[1])
     # Half-width of the back edge from chart geometry.
     base_half = (fid["ideal_back_corner_2"][0] - fid["ideal_back_corner_1"][0]) / 2.0
-    # Minimum dark pixels per row to qualify as a triangle row (not a grid line).
-    min_dark_for_back = max(3, int(base_half) - 2)
+    # Minimum dark pixels per row to qualify as a triangle "back" row. Set to
+    # 1.5 * base_half so we exclude incidental dark features that happen to
+    # cross the search window — e.g. the big chart circle's arc near BR
+    # (~10-13 dark pixels per row in our 40-px-wide search window) — while
+    # still admitting the full triangle base (2 * base_half ≈ 20 dark pixels).
+    min_dark_for_back = max(3, int(round(base_half * 1.5)))
 
     orient = fid["orientation"]
     half_x = fid["search_window_px"] // 2

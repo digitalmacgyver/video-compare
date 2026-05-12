@@ -304,11 +304,17 @@ def _make_triangle(rid, orientation, x_center, edge):
     }
 
 
+# Triangle x-centers from the chart-layout review (docs/sw2_chart_layout.md):
+# top arrows sit on the borders between cells (1,3)/(1,4) at x=180 and
+# (1,9)/(1,10) at x=540; bottom arrows on borders between (9,3)/(9,4) at
+# x=180 and (9,8)/(9,9) at x=480 (note the bottom-right is 60 px closer
+# to the centerline than the top-right — the chart is intentionally
+# asymmetric on the bottom edge).
 BOUNDARY_TRIANGLES = [
-    _make_triangle("TL", "apex_up",   60, "top"),
-    _make_triangle("TR", "apex_up",  660, "top"),
-    _make_triangle("BL", "apex_down", 60, "bottom"),
-    _make_triangle("BR", "apex_down", 660, "bottom"),
+    _make_triangle("TL", "apex_up",   180, "top"),
+    _make_triangle("TR", "apex_up",   540, "top"),
+    _make_triangle("BL", "apex_down", 180, "bottom"),
+    _make_triangle("BR", "apex_down", 480, "bottom"),
 ]
 
 
@@ -321,11 +327,16 @@ BOUNDARY_TRIANGLES = [
 # detecting directionally-biased aperture / sharpening filters via the
 # horizontal-vs-vertical arm-length asymmetry.
 
+# Position from the chart-layout review: the actual SW2 registration-cross
+# feature is in the upper-right composite region at cell (1,11) — NOT at
+# the picture-center (360, 243) where it sits in the chart spec abstractly.
+# Initial calibration: cell (1,11) center is (630, 27). Operator can refine
+# via tp_calibrate.py --preset stage2-fiducials.
 REGISTRATION_CROSS = {
     "id": "RC",
     "kind": "registration_cross",
-    "ideal_x": 360,
-    "ideal_y": 243,
+    "ideal_x": 630,
+    "ideal_y": 27,
     "ideal_arm_len_px": 17,    # tip-to-tip length of each arm
     "ideal_arm_thickness_px": 3,
     "box_size_px": 24,
