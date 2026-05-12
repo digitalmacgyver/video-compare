@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Tests for tp_artifacts."""
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import numpy as np
+import tp_chart
+import tp_synthesize
+import tp_artifacts
+
+
+def _identity():
+    return np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+
+
+def test_artifacts_measure_returns_all_regions():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    out = tp_artifacts.measure(Y, U, V, _identity())
+    assert set(out["regions"].keys()) == {r["id"] for r in tp_chart.ARTIFACT_REGIONS}
+
+
+def test_zone_plate_chroma_leak_synthesized_is_low():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    out = tp_artifacts.measure(Y, U, V, _identity())
+    zp = out["regions"]["ZP_CHROMA_LEAK"]
+    assert zp["chroma_rms"] < 5.0, f"zp.chroma_rms={zp['chroma_rms']:.2f}"
+    assert zp["chroma_present"] is False
+
+
+def test_zone_plate_chroma_leak_detects_injected_chroma():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    U2 = U.copy(); V2 = V.copy()
+    # Inject chroma into a slab inside the zone-plate region (cells 3,4-6,9).
+    # U/V are half-x; inject at half-x indices [90..270] (covers x=180..540).
+    U2[120:270, 100:260] = 600
+    V2[120:270, 100:260] = 600
+    out = tp_artifacts.measure(Y, U2, V2, _identity())
+    zp = out["regions"]["ZP_CHROMA_LEAK"]
+    assert zp["chroma_rms"] > 15.0
+    assert zp["chroma_present"] is True
+
+
+def test_cross_color_metric_zero_on_synthesized_bursts():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    out = tp_artifacts.measure(Y, U, V, _identity())
+    for rid in ("XC_BURST_300TVL", "XC_BURST_400TVL",
+                "XC_WEDGE_4MHz", "XC_WEDGE_5MHz"):
+        r = out["regions"][rid]
+        assert r["chroma_rms"] < 3.0, f"{rid} chroma_rms={r['chroma_rms']:.2f}"
+
+
+def test_summary_keys_present():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    out = tp_artifacts.measure(Y, U, V, _identity())
+    s = out["summary"]
+    for key in ("max_hanging_dots_y10_pp", "max_dot_crawl_chroma_rms",
+                "max_cross_color_chroma_rms", "max_cross_luma_y10_pp",
+                "zone_plate_chroma_present", "zone_plate_chroma_rms"):
+        assert key in s, f"missing summary key: {key}"
+
+
+TESTS = [
+    test_artifacts_measure_returns_all_regions,
+    test_zone_plate_chroma_leak_synthesized_is_low,
+    test_zone_plate_chroma_leak_detects_injected_chroma,
+    test_cross_color_metric_zero_on_synthesized_bursts,
+    test_summary_keys_present,
+]
+
+
+def main():
+    failed = 0
+    for t in TESTS:
+        try:
+            t()
+            print(f"PASS  {t.__name__}")
+        except Exception as e:
+            failed += 1
+            print(f"FAIL  {t.__name__}: {e}")
+    if failed:
+        print(f"\n{failed}/{len(TESTS)} tests failed")
+        sys.exit(1)
+    print(f"\nAll {len(TESTS)} tests passed")
+
+
+if __name__ == "__main__":
+    main()
