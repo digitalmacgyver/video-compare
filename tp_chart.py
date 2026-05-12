@@ -430,8 +430,11 @@ BURST_REGIONS = [
 
 _ARTIFACT_RAW = [
     # id,                    artifact_kind,             ideal_box
-    ("HD_RED_TOP",           "hanging_dots",            (550, 427, 160, 5)),
-    ("HD_MAGENTA_TOP",       "hanging_dots",            (30,  427, 130, 5)),
+    # HD strips sit in the grey row-8 cells immediately above row 9's
+    # chroma blocks, avoiding cells (8,2) (burst) and (8,11) (wedge) which
+    # have busy content that would swamp the cross-luma signal.
+    ("HD_RED_TOP",           "hanging_dots",            (550, 427, 46, 5)),
+    ("HD_MAGENTA_TOP",       "hanging_dots",            (10,  427, 46, 5)),
     ("DC_TARTAN_BELOW",      "dot_crawl",               (10,  64,  44,  40)),
     # XC bursts sample the same boxes the BURST_REGIONS bursts cover.
     ("XC_BURST_300TVL",      "cross_color",             (256, 67,  28,  28)),
