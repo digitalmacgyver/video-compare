@@ -216,6 +216,15 @@ def test_synthesize_renders_black_circle_dark_ring_at_expected_radius():
         f"only {dark_count}/{sampled} ring samples are dark"
 
 
+def test_synthesized_bursts_have_expected_modulation():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    for r in tp_chart.BURST_REGIONS:
+        x, y, w, h = r["ideal_box"]
+        win = Y[y:y + h, x:x + w].astype(np.float32)
+        amp = float(win.max() - win.min())
+        assert amp > 600, f"{r['id']}: amp={amp:.0f}, want >600"
+
+
 import tempfile
 import shutil
 
@@ -233,6 +242,7 @@ TESTS_NO_TMPDIR = [
     test_synthesize_renders_black_circle_dark_ring_at_expected_radius,
     test_fill_box_rejects_odd_x,
     test_fill_box_rejects_odd_w,
+    test_synthesized_bursts_have_expected_modulation,
 ]
 TESTS_TMPDIR = [
     test_cli_writes_png,

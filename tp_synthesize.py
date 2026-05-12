@@ -104,6 +104,38 @@ def _fill_triangle_y(Y: np.ndarray, p1, p2, p3, y10: int = None) -> None:
     cv2.fillPoly(Y, pts, int(y10))
 
 
+def _draw_bursts(Y: np.ndarray) -> None:
+    """Render BURST_REGIONS as black/white stripes at the chart frequency.
+
+    Horizontal sample rate is tp_chart.NTSC_SAMPLE_RATE_MHZ (13.5 MHz);
+    stripe period_px = sample_rate / freq_MHz. For burst_vertical and
+    wedge_segment, stripes are vertical (frequency along x). For
+    burst_diagonal, stripes are rotated by stripe_angle_deg.
+    """
+    for r in tp_chart.BURST_REGIONS:
+        x, y, w, h = r["ideal_box"]
+        period = tp_chart.NTSC_SAMPLE_RATE_MHZ / r["frequency_MHz"]
+        kind = r["kind"]
+        if kind in ("burst_vertical", "wedge_segment"):
+            xs = np.arange(w, dtype=np.float32)
+            phase = 2.0 * np.pi * xs / period
+            row = np.where(
+                np.sin(phase) >= 0, tp_chart.WHITE_Y10, tp_chart.BLACK_Y10
+            ).astype(np.uint16)
+            Y[y:y + h, x:x + w] = row[None, :]
+        elif kind == "burst_diagonal":
+            theta = np.deg2rad(r["stripe_angle_deg"])
+            xs = np.arange(w, dtype=np.float32)
+            ys = np.arange(h, dtype=np.float32)
+            xx, yy = np.meshgrid(xs, ys)
+            proj = xx * np.cos(theta) + yy * np.sin(theta)
+            phase = 2.0 * np.pi * proj / period
+            tile = np.where(
+                np.sin(phase) >= 0, tp_chart.WHITE_Y10, tp_chart.BLACK_Y10
+            ).astype(np.uint16)
+            Y[y:y + h, x:x + w] = tile
+
+
 def _draw_boundary_triangles(Y: np.ndarray) -> None:
     """Render all 4 boundary triangles from tp_chart.BOUNDARY_TRIANGLES."""
     for tri in tp_chart.BOUNDARY_TRIANGLES:
@@ -157,6 +189,7 @@ def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndar
     _draw_grid(Y)
     _draw_tartan(Y, U, V)
     _draw_gray_strip(Y, U, V)
+    _draw_bursts(Y)
     _draw_boundary_triangles(Y)
     _draw_black_circle(Y)
     _draw_registration_cross(Y)
