@@ -55,7 +55,7 @@ Every product module gains responsibility within its existing scope. `tp_fixture
 - Modify: `tp_chart.py:187-203`
 - Test:   `test_cases/test_tp_chart.py:114-129`
 
-Diagnostic finding: L8 (360, 378) is universally undetectable; L1/L2/L3 at y=54 are noisy. Catalog tune: 12 anchors at y ∈ {108, 162, 216, 270}, x ∈ {180, 300, 420, 540, 600} biased to avoid tartan/gray strip and the burst columns.
+Diagnostic finding: L8 (360, 378) is universally undetectable; L1/L2/L3 at y=54 are noisy. Catalog tune: 12 anchors at y ∈ {108, 162, 216, 270}, x ∈ {180, 360, 420, 540, 600} biased to avoid tartan/gray strip and the burst columns.
 
 - [ ] **Step 1: Update the test_grid_landmarks assertions to expect 12 anchors at the new positions**
 
