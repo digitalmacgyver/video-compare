@@ -169,28 +169,29 @@ def test_boundary_triangles_catalog():
         bc2 = t["ideal_back_corner_2"]
         # back_midpoint is the midpoint of the two back corners.
         assert bm == ((bc1[0] + bc2[0]) / 2, (bc1[1] + bc2[1]) / 2)
-        # apex sits 27 px from back_midpoint in the orientation direction.
+        # apex sits 15 px from back_midpoint in the orientation direction
+        # (operator-calibrated; was 27 before chart-layout review).
         if t["orientation"] == "apex_up":
-            assert t["ideal_apex"] == (bm[0], bm[1] - 27)
+            assert t["ideal_apex"] == (bm[0], bm[1] - 15)
         elif t["orientation"] == "apex_down":
-            assert t["ideal_apex"] == (bm[0], bm[1] + 27)
+            assert t["ideal_apex"] == (bm[0], bm[1] + 15)
 
 
 def test_boundary_triangles_back_corner_spacing():
-    # 20 px base across the back edge.
+    # 16 px base across the back edge (operator-calibrated; was 20).
     for t in tp_chart.BOUNDARY_TRIANGLES:
         bc1, bc2 = t["ideal_back_corner_1"], t["ideal_back_corner_2"]
         spacing = ((bc1[0] - bc2[0]) ** 2 + (bc1[1] - bc2[1]) ** 2) ** 0.5
-        assert abs(spacing - 20.0) < 0.5
+        assert abs(spacing - 16.0) < 0.5
 
 
 def test_registration_cross_catalog():
     rc = tp_chart.REGISTRATION_CROSS
     assert rc["id"] == "RC"
     assert rc["kind"] == "registration_cross"
-    # Cross lives in cell (1,11) — upper-right composite region.
-    assert rc["ideal_x"] == 630
-    assert rc["ideal_y"] == 27
+    # Cross is in the upper-right composite (operator-calibrated to (568, 36)).
+    assert rc["ideal_x"] == 568
+    assert rc["ideal_y"] == 36
     assert rc["ideal_arm_len_px"] == 17
     assert rc["ideal_arm_thickness_px"] == 3
     assert rc["box_size_px"] == 24
@@ -201,8 +202,12 @@ def test_black_circle_catalog():
     bc = tp_chart.BLACK_CIRCLE
     assert bc["id"] == "BC"
     assert bc["kind"] == "black_circle"
-    assert bc["ideal_cx"] == 360
+    assert bc["ideal_cx"] == 359
     assert bc["ideal_cy"] == 243
+    # Chart-spec literal — diameter = picture_height = 486, radius = 243.
+    # Real captures are elliptical (rx ≈ 266, ry ≈ 242) due to NTSC 10:11
+    # PAR; the detector's circular annulus catches the y-axis side of
+    # the ring and reports biased rx/ry. PAR-aware ellipse fit is future work.
     assert bc["expected_radius_px"] == 243
     assert bc["ring_thickness_px"] == 3
     assert bc["search_band_px"] >= 10

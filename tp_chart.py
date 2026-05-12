@@ -271,9 +271,12 @@ GRID_LANDMARKS = [
 # either detected from data or inferred from back_midpoint + chart-spec
 # offset (apex - back_midpoint).
 
-_BASE_HALF = 10   # half the back-edge width (20 px total)
-_HEIGHT    = 27   # apex distance from back_midpoint (perpendicular)
-_BACK_INSET = 30  # back edge sits 30 px inside the chart from the edge
+# Triangle dimensions from operator calibration against the snellhd SDI
+# capture (tp_smoke_outputs/stage2_calib.json, May 11 2026): triangles are
+# smaller than the canonical SW2 spec implied. Real-chart parameters:
+_BASE_HALF = 8    # half the back-edge width (16 px total)
+_HEIGHT    = 15   # apex distance from back_midpoint
+_BACK_INSET = 16  # back edge sits 16 px inside the chart from the edge
 
 
 def _make_triangle(rid, orientation, x_center, edge):
@@ -304,17 +307,15 @@ def _make_triangle(rid, orientation, x_center, edge):
     }
 
 
-# Triangle x-centers from the chart-layout review (docs/sw2_chart_layout.md):
-# top arrows sit on the borders between cells (1,3)/(1,4) at x=180 and
-# (1,9)/(1,10) at x=540; bottom arrows on borders between (9,3)/(9,4) at
-# x=180 and (9,8)/(9,9) at x=480 (note the bottom-right is 60 px closer
-# to the centerline than the top-right — the chart is intentionally
-# asymmetric on the bottom edge).
+# Triangle x-centers from operator calibration against snellhd. The real
+# chart is SYMMETRIC top/bottom (not asymmetric on the bottom edge as I'd
+# initially inferred from the cell-border reading) — all four triangle
+# midpoints sit at x=181 (left) or x=538 (right).
 BOUNDARY_TRIANGLES = [
-    _make_triangle("TL", "apex_up",   180, "top"),
-    _make_triangle("TR", "apex_up",   540, "top"),
-    _make_triangle("BL", "apex_down", 180, "bottom"),
-    _make_triangle("BR", "apex_down", 480, "bottom"),
+    _make_triangle("TL", "apex_up",   181, "top"),
+    _make_triangle("TR", "apex_up",   538, "top"),
+    _make_triangle("BL", "apex_down", 181, "bottom"),
+    _make_triangle("BR", "apex_down", 538, "bottom"),
 ]
 
 
@@ -327,16 +328,14 @@ BOUNDARY_TRIANGLES = [
 # detecting directionally-biased aperture / sharpening filters via the
 # horizontal-vs-vertical arm-length asymmetry.
 
-# Position from the chart-layout review: the actual SW2 registration-cross
-# feature is in the upper-right composite region at cell (1,11) — NOT at
-# the picture-center (360, 243) where it sits in the chart spec abstractly.
-# Initial calibration: cell (1,11) center is (630, 27). Operator can refine
-# via tp_calibrate.py --preset stage2-fiducials.
+# Position from operator calibration against snellhd: cross is at (568, 36)
+# in the upper-right composite (cells (1,10)/(1,11) area, below the top-row
+# tartan strip rather than next to it).
 REGISTRATION_CROSS = {
     "id": "RC",
     "kind": "registration_cross",
-    "ideal_x": 630,
-    "ideal_y": 27,
+    "ideal_x": 568,
+    "ideal_y": 36,
     "ideal_arm_len_px": 17,    # tip-to-tip length of each arm
     "ideal_arm_thickness_px": 3,
     "box_size_px": 24,
@@ -352,10 +351,18 @@ REGISTRATION_CROSS = {
 # ring thickness 168 ns @ 13.5 MHz ~ 3 samples. Used to measure aspect
 # ratio (rx vs ry) and any picture-vs-spec scaling drift.
 
+# Operator calibration confirmed the real chart is rendered with NTSC
+# 10:11 PAR baked in — the captured ring is elliptical (rx ≈ 266, ry ≈ 242,
+# ratio ≈ 11/10). We keep the catalog and the synthesizer at the chart-
+# spec literal (round circle, radius = picture_height / 2 = 243), so the
+# synthesized fixture is round and clean. On real captures the elliptical
+# ring still detects within the annulus on its y-axis sides; cv2.fitEllipse
+# returns biased rx/ry that under-report the PAR aspect (aspect_ratio_check
+# ≈ 1.0 not ≈ 0.91 — a known limitation; flag for future PAR-aware fit).
 BLACK_CIRCLE = {
     "id": "BC",
     "kind": "black_circle",
-    "ideal_cx": 360,
+    "ideal_cx": 359,
     "ideal_cy": 243,
     "expected_radius_px": 243,
     "ring_thickness_px": 3,
