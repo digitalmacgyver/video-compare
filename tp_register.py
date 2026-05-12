@@ -3,7 +3,7 @@ transform from the ideal coordinate system to the captured-frame coords.
 """
 
 from __future__ import annotations
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Tuple, List, Dict, Any
 import numpy as np
 
 import tp_chart
@@ -424,16 +424,6 @@ def detect_fiducial(Y, fid):
     raise ValueError(f"unknown fiducial kind: {kind}")
 
 
-def detect_landmark(
-    Y: np.ndarray,
-    ideal_x: int,
-    ideal_y: int,
-    search_window_px: int,
-) -> Optional[Tuple[float, float, float]]:
-    """Backward-compat alias for _grid_intersection_impl."""
-    return _grid_intersection_impl(Y, ideal_x, ideal_y, search_window_px)
-
-
 def fit_affine(
     detected_pts: np.ndarray,
     ideal_pts: np.ndarray,
@@ -511,11 +501,11 @@ RESIDUAL_OK_MAX_PX = 4.0
 MIN_INLIERS = 4
 
 
-def register(Y: np.ndarray) -> Dict[str, Any]:
-    """Top-level: detect all GRID_LANDMARKS and fit an affine.
+def _detect_grid_landmarks(Y):
+    """Run grid-intersection detection over the full GRID_LANDMARKS catalog.
 
-    Returns a dict suitable for embedding in tp_measure's per-capture JSON
-    under `_meta.registration`.
+    Returns parallel lists (detected_pts, ideal_pts, detected_lm_ids) of only
+    the landmarks that produced a hit; non-detections are silently skipped.
     """
     detected: List[Tuple[float, float]] = []
     ideal: List[Tuple[float, float]] = []
@@ -528,24 +518,11 @@ def register(Y: np.ndarray) -> Dict[str, Any]:
         detected.append((dx, dy))
         ideal.append((lm["ideal_x"], lm["ideal_y"]))
         detected_lm_ids.append(lm["id"])
+    return detected, ideal, detected_lm_ids
 
-    if len(detected) < MIN_INLIERS:
-        return {
-            "affine_matrix": None,
-            "residuals_px": {"mean": float("nan"), "max": float("nan")},
-            "inliers": len(detected),
-            "total": len(tp_chart.GRID_LANDMARKS),
-            "landmarks_used": detected_lm_ids,
-            "quality_flag": "failed",
-            "quality_reason": f"only {len(detected)} landmark(s) detected",
-        }
 
-    fit = fit_affine(np.asarray(detected, dtype=np.float32),
-                     np.asarray(ideal, dtype=np.float32))
-    fit["total"] = len(tp_chart.GRID_LANDMARKS)
-    fit["landmarks_used"] = detected_lm_ids
-    if (fit["affine_matrix"] is None
-            or fit["inliers"] < MIN_INLIERS):
+def _assign_quality_flag(fit):
+    if fit["affine_matrix"] is None or fit["inliers"] < MIN_INLIERS:
         fit["quality_flag"] = "failed"
         fit["quality_reason"] = "RANSAC failed or too few inliers"
     elif (fit["residuals_px"]["mean"] > RESIDUAL_OK_MEAN_PX
@@ -555,7 +532,37 @@ def register(Y: np.ndarray) -> Dict[str, Any]:
     else:
         fit["quality_flag"] = "ok"
         fit["quality_reason"] = None
+
+
+def _fit_register_result(detected, ideal, detected_lm_ids, total):
+    """Build a `register()`-style result dict from already-detected pts."""
+    if len(detected) < MIN_INLIERS:
+        return {
+            "affine_matrix": None,
+            "residuals_px": {"mean": float("nan"), "max": float("nan")},
+            "inliers": len(detected),
+            "total": total,
+            "landmarks_used": detected_lm_ids,
+            "quality_flag": "failed",
+            "quality_reason": f"only {len(detected)} landmark(s) detected",
+        }
+    fit = fit_affine(np.asarray(detected, dtype=np.float32),
+                     np.asarray(ideal, dtype=np.float32))
+    fit["total"] = total
+    fit["landmarks_used"] = detected_lm_ids
+    _assign_quality_flag(fit)
     return fit
+
+
+def register(Y: np.ndarray) -> Dict[str, Any]:
+    """Top-level: detect all GRID_LANDMARKS and fit an affine.
+
+    Returns a dict suitable for embedding in tp_measure's per-capture JSON
+    under `_meta.registration`.
+    """
+    detected, ideal, detected_lm_ids = _detect_grid_landmarks(Y)
+    return _fit_register_result(detected, ideal, detected_lm_ids,
+                                len(tp_chart.GRID_LANDMARKS))
 
 
 def _apply_affine_pt(M, x, y):
@@ -724,6 +731,9 @@ def _derive_geometry(fiducials, M, width, height):
 def register_with_geometry(Y):
     """Sequential-with-feedback registration.
 
+    Grid-landmark detection runs once; its results feed both the initial fit
+    and the final fit (which appends triangle back-corners and the cross).
+
     Returns:
         {
             "initial":  <Stage 1 register() result>,
@@ -732,23 +742,18 @@ def register_with_geometry(Y):
             "anchors_added": [<ids appended after Stage 1>],
         }
     """
-    initial = register(Y)
+    detected, ideal, detected_lm_ids = _detect_grid_landmarks(Y)
+    initial = _fit_register_result(detected, ideal, detected_lm_ids,
+                                   len(tp_chart.GRID_LANDMARKS))
     if initial["affine_matrix"] is None:
         return {"initial": initial, "geometry": None, "final": initial,
                 "anchors_added": []}
     M_initial = initial["affine_matrix"]
     geometry = detect_geometry(Y, M_initial)
 
-    detected_pts = []
-    ideal_pts = []
+    detected_pts = list(detected)
+    ideal_pts = list(ideal)
     anchors_added = []
-    for lm in tp_chart.GRID_LANDMARKS:
-        det = detect_fiducial(Y, lm)
-        if det is None:
-            continue
-        dx, dy, _ = det
-        detected_pts.append((dx, dy))
-        ideal_pts.append((lm["ideal_x"], lm["ideal_y"]))
 
     tris = geometry["fiducials"]["triangles"]
     for tri in tp_chart.BOUNDARY_TRIANGLES:
@@ -773,16 +778,7 @@ def register_with_geometry(Y):
     final = fit_affine(np.asarray(detected_pts, dtype=np.float32),
                        np.asarray(ideal_pts, dtype=np.float32))
     final["total"] = len(detected_pts)
-    if final["affine_matrix"] is None or final["inliers"] < MIN_INLIERS:
-        final["quality_flag"] = "failed"
-        final["quality_reason"] = "RANSAC failed or too few inliers"
-    elif (final["residuals_px"]["mean"] > RESIDUAL_OK_MEAN_PX
-          or final["residuals_px"]["max"] > RESIDUAL_OK_MAX_PX):
-        final["quality_flag"] = "warn"
-        final["quality_reason"] = "residuals exceed threshold"
-    else:
-        final["quality_flag"] = "ok"
-        final["quality_reason"] = None
+    _assign_quality_flag(final)
 
     return {
         "initial": initial,

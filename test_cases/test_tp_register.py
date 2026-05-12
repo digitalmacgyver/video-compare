@@ -15,7 +15,7 @@ def approx(a, b, tol):
     return abs(a - b) <= tol
 
 
-def test_detect_landmark_on_synthesized_ideal():
+def test_detect_grid_intersection_on_synthesized_ideal():
     Y, _, _ = tp_synthesize.synthesize(720, 486)
     # Synthesizer draws the grid at canonical (60*c, 54*r) positions; the
     # catalog ideal_x/ideal_y match those for the current catalog. The big
@@ -23,9 +23,7 @@ def test_detect_landmark_on_synthesized_ideal():
     # with antialiased pixels, biasing the projection centroid by ~1.3 px.
     # Tolerance 1.8 px accommodates that case.
     for lm in tp_chart.GRID_LANDMARKS:
-        result = tp_register.detect_landmark(
-            Y, lm["ideal_x"], lm["ideal_y"], lm["search_window_px"],
-        )
+        result = tp_register.detect_fiducial(Y, lm)
         assert result is not None, f"no detection at {lm['id']}"
         det_x, det_y, conf = result
         canon_x = round(lm["ideal_x"] / 60) * 60
@@ -39,12 +37,14 @@ def test_detect_landmark_on_synthesized_ideal():
         assert conf > 0.05
 
 
-def test_detect_landmark_off_grid_returns_none():
+def test_detect_grid_intersection_off_grid_returns_none():
     Y, _, _ = tp_synthesize.synthesize(720, 486)
     # Look in a flat-grey region: cell centre at (270, 189) -- 30 px from
     # the nearest grid line at x=240/300 and 27 px from y=162/216, well
     # outside any 24-px search window.
-    result = tp_register.detect_landmark(Y, 270, 189, 24)
+    fid = {"kind": "grid_intersection",
+           "ideal_x": 270, "ideal_y": 189, "search_window_px": 24}
+    result = tp_register.detect_fiducial(Y, fid)
     assert result is None or result[2] < 0.05
 
 
@@ -310,6 +310,34 @@ def test_register_with_geometry_increases_inlier_count():
             <= result["initial"]["residuals_px"]["mean"] + 0.1)
 
 
+def test_register_with_geometry_gracefully_handles_all_stage2_fail():
+    """Grid-only frame: Stage 1 fit succeeds, but no triangles or cross
+    exist. register_with_geometry must not crash, must add zero anchors,
+    and the final fit must equal the initial fit."""
+    Y = np.full((486, 720), tp_chart.GREY_BACKGROUND_Y10, dtype=np.uint16)
+    half = 1  # grid line width 3 -> half 1
+    for x in range(0, 721, 60):
+        x0 = max(0, x - half); x1 = min(720, x + half + 1)
+        Y[:, x0:x1] = tp_chart.BLACK_Y10
+    for y in range(0, 487, 54):
+        y0 = max(0, y - half); y1 = min(486, y + half + 1)
+        Y[y0:y1, :] = tp_chart.BLACK_Y10
+
+    result = tp_register.register_with_geometry(Y)
+    assert result["initial"]["affine_matrix"] is not None
+    geom = result["geometry"]
+    for tid in ("TL", "TR", "BL", "BR"):
+        assert geom["fiducials"]["triangles"][tid] is None, (
+            f"{tid} unexpectedly detected on pure-grid frame"
+        )
+    assert geom["fiducials"]["cross"] is None
+    assert result["anchors_added"] == []
+    final = result["final"]
+    assert final["affine_matrix"] is not None
+    assert final["inliers"] == result["initial"]["inliers"]
+    assert final["quality_flag"] == result["initial"]["quality_flag"]
+
+
 def test_register_with_geometry_preserves_identity_on_synthesized():
     Y, _, _, _ = tp_fixtures.synthesize_with_ground_truth()
     result = tp_register.register_with_geometry(Y)
@@ -323,8 +351,8 @@ def test_register_with_geometry_preserves_identity_on_synthesized():
 
 
 TESTS = [
-    test_detect_landmark_on_synthesized_ideal,
-    test_detect_landmark_off_grid_returns_none,
+    test_detect_grid_intersection_on_synthesized_ideal,
+    test_detect_grid_intersection_off_grid_returns_none,
     test_fit_affine_identity,
     test_fit_affine_translation,
     test_fit_affine_rejects_outlier,
@@ -345,6 +373,7 @@ TESTS = [
     test_detect_geometry_returns_full_block_on_clean_fixture,
     test_detect_geometry_clip_top_marks_apexes_invisible,
     test_register_with_geometry_increases_inlier_count,
+    test_register_with_geometry_gracefully_handles_all_stage2_fail,
     test_register_with_geometry_preserves_identity_on_synthesized,
 ]
 

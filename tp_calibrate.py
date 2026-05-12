@@ -33,28 +33,28 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+import tp_chart
+
 
 _ZOOM_FACTOR = 1.25
+
+# Tartan + gray-strip region ids (the Stage 1 measurement targets).
+_STAGE1_REGION_IDS = (
+    [r["id"] for r in tp_chart.TARTAN_REGIONS]
+    + [r["id"] for r in tp_chart.GRAY_REGIONS]
+)
+
+# Grid-intersection anchor ids -- sourced from the live catalog so the
+# preset stays in sync when GRID_LANDMARKS changes (e.g. anchors dropped
+# inside the moving zone-plate region).
+_GRID_LANDMARK_IDS = [lm["id"] for lm in tp_chart.GRID_LANDMARKS]
 
 # Built-in preset lists for label-prompt mode. Operator picks one with
 # --preset NAME; or supplies their own comma list via --targets.
 _PRESETS: Dict[str, List[str]] = {
-    "stage1-regions": [
-        # 8 tartan + 4 gray-strip centres (Stage 1 measurement targets).
-        "YEL", "CYN", "BLU", "RED",
-        "MAG", "GRN", "RED2", "CYN2",
-        "G1", "G2", "G3", "G4",
-    ],
-    "stage1-landmarks": [
-        # 8 registration grid-intersection landmarks (Stage 1).
-        "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8",
-    ],
-    "stage1-all": [
-        "YEL", "CYN", "BLU", "RED",
-        "MAG", "GRN", "RED2", "CYN2",
-        "G1", "G2", "G3", "G4",
-        "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8",
-    ],
+    "stage1-regions": _STAGE1_REGION_IDS,
+    "stage1-landmarks": _GRID_LANDMARK_IDS,
+    "stage1-all": _STAGE1_REGION_IDS + _GRID_LANDMARK_IDS,
     "stage2-fiducials": [
         # 4 triangles, each with back-corner-1, back-corner-2, apex.
         "TL_back_corner_1", "TL_back_corner_2", "TL_apex",
@@ -65,11 +65,6 @@ _PRESETS: Dict[str, List[str]] = {
         "RC_center",
         # Black circle ring sample points (12, 3, 6, 9 o'clock).
         "BC_north", "BC_east", "BC_south", "BC_west",
-    ],
-    "stage2-landmarks": [
-        # Updated 12-anchor grid catalog (Stage 2).
-        "L1", "L2", "L3", "L4", "L5", "L6",
-        "L7", "L8", "L9", "L10", "L11", "L12",
     ],
 }
 

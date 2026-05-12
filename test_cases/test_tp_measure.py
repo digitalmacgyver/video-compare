@@ -263,6 +263,65 @@ def test_measure_end_to_end_includes_geometry_block(tmp_dir):
     assert rrf["inlier_count_final"] >= rrf["inlier_count_initial"]
 
 
+def _make_geom(n_tris=4, cross=True, circle_rms=None):
+    tris = {tid: ({"dummy": True} if i < n_tris else None)
+            for i, tid in enumerate(("TL", "TR", "BL", "BR"))}
+    rc = {"dummy": True} if cross else None
+    bc = None if circle_rms is None else {"fit_rms": circle_rms}
+    return {"fiducials": {"triangles": tris, "cross": rc, "circle": bc}}
+
+
+def test_geometry_quality_ok_with_4_tris_cross_no_circle():
+    geom = _make_geom(n_tris=4, cross=True, circle_rms=None)
+    final = {"residuals_px": {"mean": 0.4}}
+    flag, _ = tp_measure._compute_geometry_quality(geom, final)
+    assert flag == "ok"
+
+
+def test_geometry_quality_ok_when_circle_fits_poorly():
+    # PAR-elliptical ring: circle_fit_rms is inflated, but triangles+cross
+    # are clean and residuals are tight -> quality stays "ok".
+    geom = _make_geom(n_tris=4, cross=True, circle_rms=4.5)
+    final = {"residuals_px": {"mean": 0.4}}
+    flag, _ = tp_measure._compute_geometry_quality(geom, final)
+    assert flag == "ok"
+
+
+def test_geometry_quality_warn_when_residual_above_1px():
+    geom = _make_geom(n_tris=4, cross=True, circle_rms=None)
+    final = {"residuals_px": {"mean": 1.3}}
+    flag, _ = tp_measure._compute_geometry_quality(geom, final)
+    assert flag == "warn"
+
+
+def test_geometry_quality_failed_when_residual_above_2px():
+    geom = _make_geom(n_tris=4, cross=True, circle_rms=None)
+    final = {"residuals_px": {"mean": 2.5}}
+    flag, _ = tp_measure._compute_geometry_quality(geom, final)
+    assert flag == "failed"
+
+
+def test_geometry_quality_partial_when_cross_missing():
+    geom = _make_geom(n_tris=4, cross=False, circle_rms=1.0)
+    final = {"residuals_px": {"mean": 0.4}}
+    flag, _ = tp_measure._compute_geometry_quality(geom, final)
+    assert flag == "partial"
+
+
+def test_geometry_quality_partial_when_only_2_triangles():
+    geom = _make_geom(n_tris=2, cross=True, circle_rms=1.0)
+    final = {"residuals_px": {"mean": 0.4}}
+    flag, _ = tp_measure._compute_geometry_quality(geom, final)
+    assert flag == "partial"
+
+
+def test_geometry_quality_failed_when_cross_and_tris_all_missing():
+    geom = _make_geom(n_tris=1, cross=False, circle_rms=None)
+    final = {"residuals_px": {"mean": 0.4}}
+    flag, _ = tp_measure._compute_geometry_quality(geom, final)
+    assert flag == "failed"
+
+
 TESTS_TMPDIR = [
     test_extract_frame_yuv422p10le_720x486,
     test_extract_pad_720x480_dvd_like,
@@ -277,6 +336,13 @@ TESTS_NO_TMPDIR = [
     test_pad_to_486_raises_on_oversized_height,
     test_fit_gray_ramp_unit_pure_gain_signature,
     test_fit_gray_ramp_returns_none_on_malformed_input,
+    test_geometry_quality_ok_with_4_tris_cross_no_circle,
+    test_geometry_quality_ok_when_circle_fits_poorly,
+    test_geometry_quality_warn_when_residual_above_1px,
+    test_geometry_quality_failed_when_residual_above_2px,
+    test_geometry_quality_partial_when_cross_missing,
+    test_geometry_quality_partial_when_only_2_triangles,
+    test_geometry_quality_failed_when_cross_and_tris_all_missing,
 ]
 
 

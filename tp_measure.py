@@ -344,23 +344,28 @@ def _build_geometry_block(reg_full):
 
 
 def _compute_geometry_quality(geom, final):
+    """Map Stage 2 detection counts + refit residuals to a quality flag.
+
+    The black circle's ring is elliptical on real NTSC captures (10:11 PAR),
+    and our circular detector reports inflated fit_rms even when triangles
+    and cross are perfectly registered. So the circle is informational only
+    -- it does not gate the flag. Gating is by triangle/cross presence and
+    the final-fit mean residual.
+    """
     tris = geom["fiducials"]["triangles"]
     detected_count = sum(1 for t in tris.values() if t is not None)
     cross_ok = geom["fiducials"]["cross"] is not None
-    circle_fit_rms = (geom["fiducials"]["circle"] or {}).get("fit_rms")
     mean_res = final["residuals_px"]["mean"]
 
     if detected_count < 2 and not cross_ok:
         return "failed", "cross missing and <2 triangles detected"
     if detected_count < 3 or not cross_ok:
         return "partial", f"only {detected_count}/4 triangles, cross={cross_ok}"
-    if (circle_fit_rms is not None and circle_fit_rms < 2.0
-            and mean_res < 1.0):
+    if mean_res < 1.0:
         return "ok", None
-    if ((circle_fit_rms is None or circle_fit_rms < 5.0)
-            and mean_res < 2.0):
-        return "warn", "residuals or circle_fit_rms exceed ok threshold"
-    return "failed", "residuals or circle fit too poor"
+    if mean_res < 2.0:
+        return "warn", f"mean residual {mean_res:.2f} px above 1.0 px ok threshold"
+    return "failed", f"mean residual {mean_res:.2f} px above 2.0 px warn threshold"
 
 
 def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
