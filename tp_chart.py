@@ -387,16 +387,20 @@ NTSC_SAMPLE_RATE_MHZ = 13.5  # horizontal sample rate for NTSC SDI 720-wide
 # fs/(2 * picture_width_px / tvl) ≈ ; we use plausible nominal values that
 # match the labels visible on the chart. The classifier doesn't depend on
 # absolute frequency, only relative modulation across regions.
+# Boxes are 28x28 centered in each 60x54 cell so they leave a >=12-px
+# margin from cell borders. This keeps bursts clear of grid-landmark
+# search windows (24-px window = 12-px half-width) at neighboring cell
+# corners.
 _BURST_RAW = [
-    # (id,                kind,             freq_MHz, ideal_box,         extras)
-    ("BURST_3p58",        "burst_vertical", 3.58,     (70, 61, 40, 40),  {}),
-    ("BURST_4p43",        "burst_vertical", 4.43,     (610, 61, 40, 40), {}),
-    ("BURST_4p286_SECAM", "burst_vertical", 4.286,    (70, 385, 40, 40), {}),
-    ("BURST_300TVL_DIAG", "burst_diagonal", 3.95,     (250, 61, 40, 40), {"stripe_angle_deg": 45}),
-    ("BURST_400TVL_DIAG", "burst_diagonal", 5.27,     (430, 61, 40, 40), {"stripe_angle_deg": 45}),
-    ("WEDGE_3MHz",        "wedge_segment",  3.0,      (550, 169, 40, 40), {}),
-    ("WEDGE_4MHz",        "wedge_segment",  4.0,      (550, 223, 40, 40), {}),
-    ("WEDGE_5MHz",        "wedge_segment",  5.0,      (550, 277, 40, 40), {}),
+    # (id,                kind,             freq_MHz, ideal_box,          extras)
+    ("BURST_3p58",        "burst_vertical", 3.58,     (76,  67,  28, 28), {}),
+    ("BURST_4p43",        "burst_vertical", 4.43,     (616, 67,  28, 28), {}),
+    ("BURST_4p286_SECAM", "burst_vertical", 4.286,    (76,  391, 28, 28), {}),
+    ("BURST_300TVL_DIAG", "burst_diagonal", 3.95,     (256, 67,  28, 28), {"stripe_angle_deg": 45}),
+    ("BURST_400TVL_DIAG", "burst_diagonal", 5.27,     (436, 67,  28, 28), {"stripe_angle_deg": 45}),
+    ("WEDGE_3MHz",        "wedge_segment",  3.0,      (556, 175, 28, 28), {}),
+    ("WEDGE_4MHz",        "wedge_segment",  4.0,      (556, 229, 28, 28), {}),
+    ("WEDGE_5MHz",        "wedge_segment",  5.0,      (556, 283, 28, 28), {}),
 ]
 
 BURST_REGIONS = [
@@ -429,10 +433,11 @@ _ARTIFACT_RAW = [
     ("HD_RED_TOP",           "hanging_dots",            (550, 427, 160, 5)),
     ("HD_MAGENTA_TOP",       "hanging_dots",            (30,  427, 130, 5)),
     ("DC_TARTAN_BELOW",      "dot_crawl",               (10,  64,  44,  40)),
-    ("XC_BURST_300TVL",      "cross_color",             (250, 61,  40,  40)),
-    ("XC_BURST_400TVL",      "cross_color",             (430, 61,  40,  40)),
-    ("XC_WEDGE_4MHz",        "cross_color",             (550, 223, 40,  40)),
-    ("XC_WEDGE_5MHz",        "cross_color",             (550, 277, 40,  40)),
+    # XC bursts sample the same boxes the BURST_REGIONS bursts cover.
+    ("XC_BURST_300TVL",      "cross_color",             (256, 67,  28,  28)),
+    ("XC_BURST_400TVL",      "cross_color",             (436, 67,  28,  28)),
+    ("XC_WEDGE_4MHz",        "cross_color",             (556, 229, 28,  28)),
+    ("XC_WEDGE_5MHz",        "cross_color",             (556, 283, 28,  28)),
     ("XL_RED_INTERIOR",      "cross_luma",              (600, 445, 60,  30)),
     ("XL_MAGENTA_INTERIOR",  "cross_luma",              (130, 445, 40,  30)),
     ("ZP_CHROMA_LEAK",       "zone_plate_chroma_leak",  (180, 108, 360, 216)),
