@@ -670,7 +670,7 @@ def render_frequency_response(captures: List[Dict[str, Any]]) -> str:
         s = (fr.get("summary") or {}) if isinstance(fr, dict) else {}
         m3 = s.get("minus_3db_freq_MHz")
         m6 = s.get("minus_6db_freq_MHz")
-        name = _basename(c["_meta"].get("capture_path", "?"))
+        name = _basename(c["_meta"].get("capture", c["_meta"].get("capture_path", "?")))
         m3_str = f"{m3:.2f}" if m3 is not None else "—"
         m6_str = f"{m6:.2f}" if m6 is not None else "—"
         rows.append(f"<tr><td>{_h.escape(name)}</td>"
@@ -684,7 +684,7 @@ def render_frequency_response(captures: List[Dict[str, Any]]) -> str:
         curve = (fr.get("summary") or {}).get("luma_response_curve", []) or []
         if not curve:
             continue
-        name = _basename(c["_meta"].get("capture_path", "?"))
+        name = _basename(c["_meta"].get("capture", c["_meta"].get("capture_path", "?")))
         datasets.append({
             "label": name,
             "data": [{"x": float(f), "y": float(d)} for f, d in curve],
@@ -725,7 +725,7 @@ def render_artifacts(captures: List[Dict[str, Any]]) -> str:
         a = c.get("artifacts") or {}
         s = (a.get("summary") or {}) if isinstance(a, dict) else {}
         zp_present = s.get("zone_plate_chroma_present", False)
-        name = _basename(c["_meta"].get("capture_path", "?"))
+        name = _basename(c["_meta"].get("capture", c["_meta"].get("capture_path", "?")))
         rows.append(
             "<tr>"
             f"<td>{_h.escape(name)}</td>"
@@ -756,7 +756,7 @@ def render_decoder_class(captures: List[Dict[str, Any]]) -> str:
         ev = (dc.get("evidence") or {})
         cands = ev.get("candidate_confidences", {}) or {}
         cands_str = ", ".join(f"{k}: {v:.2f}" for k, v in cands.items())
-        name = _basename(c["_meta"].get("capture_path", "?"))
+        name = _basename(c["_meta"].get("capture", c["_meta"].get("capture_path", "?")))
         rows.append(
             "<tr>"
             f"<td>{_h.escape(name)}</td>"
