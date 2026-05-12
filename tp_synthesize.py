@@ -104,6 +104,22 @@ def _fill_triangle_y(Y: np.ndarray, p1, p2, p3, y10: int = None) -> None:
     cv2.fillPoly(Y, pts, int(y10))
 
 
+def _draw_saturated_chroma_blocks(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> None:
+    """Render the row-9 saturated chroma blocks so Stage 3 artifact
+    metrics have real chroma transitions to sample around.
+
+    - Cells (9,10)-(9,12): 100% red block.
+    - Cells (9,1)-(9,3): magenta steps at 33/66/100% saturation.
+    """
+    # Red 100% block: x=540, y=432, w=180, h=54.
+    y10, u10, v10 = tp_chart.rgb_norm_to_yuv10(1.0, 0.0, 0.0)
+    _fill_box_yuv422(Y, U, V, (540, 432, 180, 54), y10, u10, v10)
+    # Magenta steps.
+    for i, frac in enumerate([1.0 / 3.0, 2.0 / 3.0, 1.0]):
+        y10, u10, v10 = tp_chart.rgb_norm_to_yuv10(frac, 0.0, frac)
+        _fill_box_yuv422(Y, U, V, (i * 60, 432, 60, 54), y10, u10, v10)
+
+
 def _draw_bursts(Y: np.ndarray) -> None:
     """Render BURST_REGIONS as black/white stripes at the chart frequency.
 
@@ -190,6 +206,7 @@ def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndar
     _draw_tartan(Y, U, V)
     _draw_gray_strip(Y, U, V)
     _draw_bursts(Y)
+    _draw_saturated_chroma_blocks(Y, U, V)
     _draw_boundary_triangles(Y)
     _draw_black_circle(Y)
     _draw_registration_cross(Y)

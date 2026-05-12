@@ -216,6 +216,22 @@ def test_synthesize_renders_black_circle_dark_ring_at_expected_radius():
         f"only {dark_count}/{sampled} ring samples are dark"
 
 
+def test_synthesized_red_block_is_saturated():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    win_y = Y[445:475, 600:660].astype(np.float32).mean()
+    # 100% red in BT.601 limited range: Y10 ~ 64 + 0.299*876 ≈ 326.
+    assert 250 < win_y < 400, f"red Y mean={win_y:.0f}, want ~326"
+    # V is half-x sampled; red at full sat -> V well above center (512).
+    win_v = V[445:475, 300:330].astype(np.float32).mean()
+    assert win_v > 700, f"red V mean={win_v:.0f}, want >700"
+
+
+def test_synthesized_magenta_steps_monotonic():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    ys = [Y[450:470, x0:x0 + 30].astype(np.float32).mean() for x0 in (15, 75, 135)]
+    assert ys[0] < ys[1] < ys[2], f"magenta steps not monotonic: {ys}"
+
+
 def test_synthesized_bursts_have_expected_modulation():
     Y, U, V = tp_synthesize.synthesize(720, 486)
     for r in tp_chart.BURST_REGIONS:
@@ -243,6 +259,8 @@ TESTS_NO_TMPDIR = [
     test_fill_box_rejects_odd_x,
     test_fill_box_rejects_odd_w,
     test_synthesized_bursts_have_expected_modulation,
+    test_synthesized_red_block_is_saturated,
+    test_synthesized_magenta_steps_monotonic,
 ]
 TESTS_TMPDIR = [
     test_cli_writes_png,
