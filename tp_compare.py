@@ -659,6 +659,55 @@ def render_sample_diagnostics(captures: List[Dict[str, Any]]) -> str:
 """
 
 
+def render_frequency_response(captures: List[Dict[str, Any]]) -> str:
+    if not any(c.get("frequency_response") for c in captures):
+        return ""
+    rows = ['<section class="freq-response"><h2>Frequency response (Stage 3)</h2>']
+    rows.append('<table class="freq-table"><thead><tr><th>Clip</th>'
+                '<th>−3 dB (MHz)</th><th>−6 dB (MHz)</th></tr></thead><tbody>')
+    for c in captures:
+        fr = c.get("frequency_response") or {}
+        s = (fr.get("summary") or {}) if isinstance(fr, dict) else {}
+        m3 = s.get("minus_3db_freq_MHz")
+        m6 = s.get("minus_6db_freq_MHz")
+        name = _basename(c["_meta"].get("capture_path", "?"))
+        m3_str = f"{m3:.2f}" if m3 is not None else "—"
+        m6_str = f"{m6:.2f}" if m6 is not None else "—"
+        rows.append(f"<tr><td>{_h.escape(name)}</td>"
+                    f"<td>{m3_str}</td><td>{m6_str}</td></tr>")
+    rows.append("</tbody></table>")
+    datasets = []
+    for c in captures:
+        fr = c.get("frequency_response") or {}
+        if not isinstance(fr, dict):
+            continue
+        curve = (fr.get("summary") or {}).get("luma_response_curve", []) or []
+        if not curve:
+            continue
+        name = _basename(c["_meta"].get("capture_path", "?"))
+        datasets.append({
+            "label": name,
+            "data": [{"x": float(f), "y": float(d)} for f, d in curve],
+        })
+    rows.append('<canvas id="freqChart" height="160"></canvas>')
+    rows.append("<script>")
+    rows.append(f"const FREQ_DATA = {json.dumps(datasets)};")
+    rows.append("""new Chart(document.getElementById('freqChart').getContext('2d'), {
+        type: 'line',
+        data: {datasets: FREQ_DATA.map(d => Object.assign({}, d,
+                                                          {fill:false, tension:0.2, parsing:false}))},
+        options: {
+            parsing: false,
+            scales: {x: {type: 'linear',
+                         title:{display:true, text:'Frequency (MHz)'}},
+                     y: {title:{display:true, text:'Modulation (dB)'}}},
+            plugins: {legend:{position:'top'}}
+        }
+    });""")
+    rows.append("</script></section>")
+    return "\n".join(rows)
+
+
 def render_page(captures: List[Dict[str, Any]]) -> str:
     title = f"SW2 Comparison — {len(captures)} captures"
     sections = (
@@ -667,6 +716,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_tartan_deltas(captures)
         + render_gray_deltas(captures)
         + render_luma_scale_analysis(captures)
+        + render_frequency_response(captures)
         + render_sample_diagnostics(captures)
     )
     return f"""<!doctype html>

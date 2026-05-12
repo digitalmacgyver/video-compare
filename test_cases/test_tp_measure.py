@@ -322,12 +322,33 @@ def test_geometry_quality_failed_when_cross_and_tris_all_missing():
     assert flag == "failed"
 
 
+def test_measure_end_to_end_includes_frequency_response(tmp_dir):
+    capture_path = os.path.join(tmp_dir, "ideal.mov")
+    json_path = os.path.join(tmp_dir, "out_freq.json")
+    _write_synthesized_prores(capture_path, 720, 486, frames=5)
+    subprocess.run(
+        ["python", "tp_measure.py", capture_path,
+         "--frame", "0", "--output", json_path],
+        check=True, cwd=PROJECT_ROOT,
+    )
+    with open(json_path) as f:
+        data = json.load(f)
+    assert "frequency_response" in data
+    fr = data["frequency_response"]
+    assert fr is not None
+    assert "regions" in fr
+    assert "summary" in fr
+    assert "BURST_3p58" in fr["regions"]
+    assert fr["regions"]["BURST_3p58"]["modulation_pct"] > 30.0
+
+
 TESTS_TMPDIR = [
     test_extract_frame_yuv422p10le_720x486,
     test_extract_pad_720x480_dvd_like,
     test_measure_end_to_end_zero_deltas,
     test_measure_end_to_end_dvd_padding,
     test_measure_end_to_end_includes_geometry_block,
+    test_measure_end_to_end_includes_frequency_response,
 ]
 TESTS_NO_TMPDIR = [
     test_pad_to_486_centers_grey,

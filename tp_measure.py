@@ -422,6 +422,7 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
     luma_scale = fit_gray_ramp(grays)
 
     geometry_block = _build_geometry_block(reg_full)
+    stage3 = _measure_stage3(Y_p, U_p, V_p, M, reg["quality_flag"])
 
     return {
         "_meta": meta,
@@ -429,7 +430,39 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
         "grays": grays,
         "luma_scale": luma_scale,
         "geometry": geometry_block,
+        "frequency_response": stage3["frequency_response"],
+        "artifacts":          stage3["artifacts"],
+        "decoder_class":      stage3["decoder_class"],
     }
+
+
+def _measure_stage3(Y, U, V, affine, registration_quality_flag):
+    """Run the Stage 3 measurement layer (frequency response + artifacts +
+    decoder-class classification). Returns a dict with three keys; each is
+    None on registration failure or per-stage exception."""
+    out = {"frequency_response": None, "artifacts": None, "decoder_class": None}
+    if affine is None or registration_quality_flag == "failed":
+        return out
+    try:
+        import tp_freq
+        out["frequency_response"] = tp_freq.measure(Y, U, V, affine)
+    except Exception as e:
+        out["frequency_response"] = {"error": str(e)}
+    try:
+        import tp_artifacts
+        out["artifacts"] = tp_artifacts.measure(Y, U, V, affine)
+    except Exception as e:
+        out["artifacts"] = {"error": str(e)}
+    try:
+        import tp_classify
+        if (out["frequency_response"] and "regions" in out["frequency_response"]
+                and out["artifacts"] and "regions" in out["artifacts"]):
+            out["decoder_class"] = tp_classify.classify(
+                out["frequency_response"], out["artifacts"]
+            )
+    except Exception as e:
+        out["decoder_class"] = {"error": str(e)}
+    return out
 
 
 def _main():
