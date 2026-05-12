@@ -130,6 +130,29 @@ def test_fixture_clip_bottom_invalidates_BL_BR_apexes():
     assert gt["triangles"]["TL"]["apex_visible"] is True
 
 
+def test_inject_hanging_dots_raises_hd_metric():
+    import tp_synthesize, tp_artifacts
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    M = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+    base = tp_artifacts.measure(Y, U, V, M)
+    Y2 = Y.copy()
+    tp_fixtures.inject_hanging_dots(Y2, region_id="HD_RED_TOP", amplitude_y10=80)
+    bad = tp_artifacts.measure(Y2, U, V, M)
+    base_pp = base["regions"]["HD_RED_TOP"]["metric_y10_pp"]
+    bad_pp = bad["regions"]["HD_RED_TOP"]["metric_y10_pp"]
+    assert bad_pp > base_pp + 40, f"base={base_pp:.1f}, bad={bad_pp:.1f}"
+
+
+def test_inject_cross_color_raises_xc_metric():
+    import tp_synthesize, tp_artifacts
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    M = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+    U2 = U.copy(); V2 = V.copy()
+    tp_fixtures.inject_cross_color(U2, V2, region_id="XC_WEDGE_5MHz", chroma_amp=60)
+    bad = tp_artifacts.measure(Y, U2, V2, M)
+    assert bad["regions"]["XC_WEDGE_5MHz"]["chroma_rms"] > 30
+
+
 TESTS = [
     test_fixture_identity_ground_truth_matches_chart_catalog,
     test_fixture_shift_updates_ground_truth_and_frame,
@@ -138,6 +161,8 @@ TESTS = [
     test_fixture_blur_softens_edges_but_preserves_truth,
     test_fixture_clip_top_invalidates_TL_TR_apexes,
     test_fixture_clip_bottom_invalidates_BL_BR_apexes,
+    test_inject_hanging_dots_raises_hd_metric,
+    test_inject_cross_color_raises_xc_metric,
 ]
 
 

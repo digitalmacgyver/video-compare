@@ -235,3 +235,42 @@ def synthesize_with_ground_truth(
         gt = _apply_clip_to_ground_truth(gt, clip_top, clip_bottom,
                                          clip_left, clip_right, width, height)
     return Y, U, V, gt
+
+
+# =====================================================================
+# Stage 3 degradation helpers (artifact-injection for tests)
+# =====================================================================
+
+def _artifact_region(region_id):
+    for r in tp_chart.ARTIFACT_REGIONS:
+        if r["id"] == region_id:
+            return r
+    raise KeyError(region_id)
+
+
+def inject_hanging_dots(Y, region_id, amplitude_y10=80):
+    """Overlay a sinusoidal Y modulation at the NTSC SC frequency over the
+    named ARTIFACT_REGIONS box. Simulates the cross-luma a line-comb
+    decoder injects at vertical chroma transitions."""
+    r = _artifact_region(region_id)
+    x, y, w, h = r["ideal_box"]
+    period = tp_chart.NTSC_SAMPLE_RATE_MHZ / 3.58
+    xs = np.arange(w, dtype=np.float32)
+    pattern = (amplitude_y10 * np.sin(2.0 * np.pi * xs / period)).astype(np.int32)
+    region = Y[y:y + h, x:x + w].astype(np.int32) + pattern[None, :]
+    Y[y:y + h, x:x + w] = np.clip(region, 0, 1023).astype(np.uint16)
+
+
+def inject_cross_color(U, V, region_id, chroma_amp=60):
+    """Add chroma offset into U and V over the named region (half-x crop).
+    Simulates the cross-color a notch decoder produces inside luma-only
+    burst regions."""
+    r = _artifact_region(region_id)
+    x, y, w, h = r["ideal_box"]
+    ux0 = x // 2; ux1 = (x + w) // 2
+    U[y:y + h, ux0:ux1] = np.clip(
+        U[y:y + h, ux0:ux1].astype(np.int32) + chroma_amp, 0, 1023
+    ).astype(np.uint16)
+    V[y:y + h, ux0:ux1] = np.clip(
+        V[y:y + h, ux0:ux1].astype(np.int32) + chroma_amp, 0, 1023
+    ).astype(np.uint16)
