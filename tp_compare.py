@@ -741,6 +741,34 @@ def render_artifacts(captures: List[Dict[str, Any]]) -> str:
     return "\n".join(rows)
 
 
+def render_decoder_class(captures: List[Dict[str, Any]]) -> str:
+    if not any(c.get("decoder_class") for c in captures):
+        return ""
+    rows = ['<section class="decoder-class"><h2>Decoder class (Stage 3)</h2>']
+    rows.append('<table class="decoder-table"><thead><tr>'
+                '<th>Clip</th><th>Class</th><th>Confidence</th>'
+                '<th>Candidate confidences</th>'
+                '</tr></thead><tbody>')
+    for c in captures:
+        dc = c.get("decoder_class") or {}
+        cls = dc.get("decoder_class", "—")
+        conf = float(dc.get("confidence", 0.0))
+        ev = (dc.get("evidence") or {})
+        cands = ev.get("candidate_confidences", {}) or {}
+        cands_str = ", ".join(f"{k}: {v:.2f}" for k, v in cands.items())
+        name = _basename(c["_meta"].get("capture_path", "?"))
+        rows.append(
+            "<tr>"
+            f"<td>{_h.escape(name)}</td>"
+            f"<td><strong>{_h.escape(str(cls))}</strong></td>"
+            f"<td>{conf:.2f}</td>"
+            f"<td>{_h.escape(cands_str)}</td>"
+            "</tr>"
+        )
+    rows.append("</tbody></table></section>")
+    return "\n".join(rows)
+
+
 def render_page(captures: List[Dict[str, Any]]) -> str:
     title = f"SW2 Comparison — {len(captures)} captures"
     sections = (
@@ -751,6 +779,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_luma_scale_analysis(captures)
         + render_frequency_response(captures)
         + render_artifacts(captures)
+        + render_decoder_class(captures)
         + render_sample_diagnostics(captures)
     )
     return f"""<!doctype html>

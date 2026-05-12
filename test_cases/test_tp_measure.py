@@ -322,6 +322,27 @@ def test_geometry_quality_failed_when_cross_and_tris_all_missing():
     assert flag == "failed"
 
 
+def test_measure_end_to_end_includes_decoder_class(tmp_dir):
+    capture_path = os.path.join(tmp_dir, "ideal.mov")
+    json_path = os.path.join(tmp_dir, "out_cls.json")
+    _write_synthesized_prores(capture_path, 720, 486, frames=5)
+    subprocess.run(
+        ["python", "tp_measure.py", capture_path,
+         "--frame", "0", "--output", json_path],
+        check=True, cwd=PROJECT_ROOT,
+    )
+    with open(json_path) as f:
+        data = json.load(f)
+    assert "decoder_class" in data
+    dc = data["decoder_class"]
+    assert dc is not None
+    assert dc["decoder_class"] in (
+        "notch", "line_comb", "temporal_comb_or_adaptive", "undetermined"
+    )
+    assert "evidence" in dc
+    assert "candidate_confidences" in dc["evidence"]
+
+
 def test_measure_end_to_end_includes_artifacts(tmp_dir):
     capture_path = os.path.join(tmp_dir, "ideal.mov")
     json_path = os.path.join(tmp_dir, "out_art.json")
@@ -370,6 +391,7 @@ TESTS_TMPDIR = [
     test_measure_end_to_end_includes_geometry_block,
     test_measure_end_to_end_includes_frequency_response,
     test_measure_end_to_end_includes_artifacts,
+    test_measure_end_to_end_includes_decoder_class,
 ]
 TESTS_NO_TMPDIR = [
     test_pad_to_486_centers_grey,
