@@ -49,6 +49,10 @@ _STAGE1_REGION_IDS = (
 # inside the moving zone-plate region).
 _GRID_LANDMARK_IDS = [lm["id"] for lm in tp_chart.GRID_LANDMARKS]
 
+# Stage 3 region ids (frequency-burst and artifact regions).
+_STAGE3_BURST_IDS = [r["id"] for r in tp_chart.BURST_REGIONS]
+_STAGE3_ARTIFACT_IDS = [r["id"] for r in tp_chart.ARTIFACT_REGIONS]
+
 # Built-in preset lists for label-prompt mode. Operator picks one with
 # --preset NAME; or supplies their own comma list via --targets.
 _PRESETS: Dict[str, List[str]] = {
@@ -66,6 +70,8 @@ _PRESETS: Dict[str, List[str]] = {
         # Black circle ring sample points (12, 3, 6, 9 o'clock).
         "BC_north", "BC_east", "BC_south", "BC_west",
     ],
+    "stage3-bursts": _STAGE3_BURST_IDS,
+    "stage3-artifacts": _STAGE3_ARTIFACT_IDS,
 }
 
 
