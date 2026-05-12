@@ -708,6 +708,39 @@ def render_frequency_response(captures: List[Dict[str, Any]]) -> str:
     return "\n".join(rows)
 
 
+def render_artifacts(captures: List[Dict[str, Any]]) -> str:
+    if not any(c.get("artifacts") for c in captures):
+        return ""
+    rows = ['<section class="artifacts"><h2>Decoder artifacts (Stage 3)</h2>']
+    rows.append('<table class="artifact-table"><thead><tr>'
+                '<th>Clip</th>'
+                '<th>Hanging dots (Y pp)</th>'
+                '<th>Dot crawl (chroma RMS)</th>'
+                '<th>Cross-color (chroma RMS)</th>'
+                '<th>Cross-luma (Y pp)</th>'
+                '<th>Zone-plate chroma RMS</th>'
+                '<th>ZP chroma present?</th>'
+                '</tr></thead><tbody>')
+    for c in captures:
+        a = c.get("artifacts") or {}
+        s = (a.get("summary") or {}) if isinstance(a, dict) else {}
+        zp_present = s.get("zone_plate_chroma_present", False)
+        name = _basename(c["_meta"].get("capture_path", "?"))
+        rows.append(
+            "<tr>"
+            f"<td>{_h.escape(name)}</td>"
+            f"<td>{s.get('max_hanging_dots_y10_pp', 0):.1f}</td>"
+            f"<td>{s.get('max_dot_crawl_chroma_rms', 0):.2f}</td>"
+            f"<td>{s.get('max_cross_color_chroma_rms', 0):.2f}</td>"
+            f"<td>{s.get('max_cross_luma_y10_pp', 0):.1f}</td>"
+            f"<td>{s.get('zone_plate_chroma_rms', 0):.2f}</td>"
+            f"<td>{'YES' if zp_present else 'no'}</td>"
+            "</tr>"
+        )
+    rows.append("</tbody></table></section>")
+    return "\n".join(rows)
+
+
 def render_page(captures: List[Dict[str, Any]]) -> str:
     title = f"SW2 Comparison — {len(captures)} captures"
     sections = (
@@ -717,6 +750,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_gray_deltas(captures)
         + render_luma_scale_analysis(captures)
         + render_frequency_response(captures)
+        + render_artifacts(captures)
         + render_sample_diagnostics(captures)
     )
     return f"""<!doctype html>

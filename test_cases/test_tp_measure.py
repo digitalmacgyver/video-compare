@@ -322,6 +322,26 @@ def test_geometry_quality_failed_when_cross_and_tris_all_missing():
     assert flag == "failed"
 
 
+def test_measure_end_to_end_includes_artifacts(tmp_dir):
+    capture_path = os.path.join(tmp_dir, "ideal.mov")
+    json_path = os.path.join(tmp_dir, "out_art.json")
+    _write_synthesized_prores(capture_path, 720, 486, frames=5)
+    subprocess.run(
+        ["python", "tp_measure.py", capture_path,
+         "--frame", "0", "--output", json_path],
+        check=True, cwd=PROJECT_ROOT,
+    )
+    with open(json_path) as f:
+        data = json.load(f)
+    assert "artifacts" in data
+    art = data["artifacts"]
+    assert art is not None
+    assert "regions" in art
+    assert "summary" in art
+    assert "ZP_CHROMA_LEAK" in art["regions"]
+    assert art["summary"]["zone_plate_chroma_present"] is False
+
+
 def test_measure_end_to_end_includes_frequency_response(tmp_dir):
     capture_path = os.path.join(tmp_dir, "ideal.mov")
     json_path = os.path.join(tmp_dir, "out_freq.json")
@@ -349,6 +369,7 @@ TESTS_TMPDIR = [
     test_measure_end_to_end_dvd_padding,
     test_measure_end_to_end_includes_geometry_block,
     test_measure_end_to_end_includes_frequency_response,
+    test_measure_end_to_end_includes_artifacts,
 ]
 TESTS_NO_TMPDIR = [
     test_pad_to_486_centers_grey,
