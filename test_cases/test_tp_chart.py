@@ -235,6 +235,24 @@ def test_burst_regions_catalog():
             assert "stripe_angle_deg" in r
 
 
+def test_artifact_regions_catalog():
+    ids = [r["id"] for r in tp_chart.ARTIFACT_REGIONS]
+    expected = {"HD_RED_TOP", "HD_MAGENTA_TOP", "DC_TARTAN_BELOW",
+                "XC_BURST_300TVL", "XC_BURST_400TVL", "XC_WEDGE_4MHz",
+                "XC_WEDGE_5MHz", "XL_RED_INTERIOR", "XL_MAGENTA_INTERIOR",
+                "ZP_CHROMA_LEAK"}
+    assert set(ids) == expected
+    valid_kinds = {"hanging_dots", "dot_crawl", "cross_color",
+                   "cross_luma", "zone_plate_chroma_leak"}
+    for r in tp_chart.ARTIFACT_REGIONS:
+        assert r["artifact_kind"] in valid_kinds
+        x, y, w, h = r["ideal_box"]
+        assert w > 0 and h > 0
+        assert 0 <= x and x + w <= 720
+        assert 0 <= y and y + h <= 486
+        assert x % 2 == 0 and w % 2 == 0
+
+
 TESTS = [
     test_constants_exist,
     test_rgb_norm_to_yuv10_black,
@@ -255,6 +273,7 @@ TESTS = [
     test_registration_cross_catalog,
     test_black_circle_catalog,
     test_burst_regions_catalog,
+    test_artifact_regions_catalog,
 ]
 
 

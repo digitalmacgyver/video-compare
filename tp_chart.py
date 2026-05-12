@@ -410,3 +410,40 @@ BURST_REGIONS = [
     }
     for rid, kind, freq, box, extras in _BURST_RAW
 ]
+
+
+# =====================================================================
+# ARTIFACT REGIONS (Stage 3 — decoder-artifact detection)
+# =====================================================================
+#
+# Boxes sampled for hanging-dots / dot-crawl / cross-color / cross-luma /
+# zone-plate-chroma-leak metrics. Coordinates are initial values derived
+# from the chart layout doc; operator calibration via tp_calibrate.py
+# --preset stage3-artifacts can refine on real captures.
+#
+# All boxes use even x and even w to satisfy 4:2:2 alignment (so the U/V
+# half-x crop indices are integers).
+
+_ARTIFACT_RAW = [
+    # id,                    artifact_kind,             ideal_box
+    ("HD_RED_TOP",           "hanging_dots",            (550, 427, 160, 5)),
+    ("HD_MAGENTA_TOP",       "hanging_dots",            (30,  427, 130, 5)),
+    ("DC_TARTAN_BELOW",      "dot_crawl",               (10,  64,  44,  40)),
+    ("XC_BURST_300TVL",      "cross_color",             (250, 61,  40,  40)),
+    ("XC_BURST_400TVL",      "cross_color",             (430, 61,  40,  40)),
+    ("XC_WEDGE_4MHz",        "cross_color",             (550, 223, 40,  40)),
+    ("XC_WEDGE_5MHz",        "cross_color",             (550, 277, 40,  40)),
+    ("XL_RED_INTERIOR",      "cross_luma",              (600, 445, 60,  30)),
+    ("XL_MAGENTA_INTERIOR",  "cross_luma",              (130, 445, 40,  30)),
+    ("ZP_CHROMA_LEAK",       "zone_plate_chroma_leak",  (180, 108, 360, 216)),
+]
+
+ARTIFACT_REGIONS = [
+    {
+        "id":            rid,
+        "artifact_kind": kind,
+        "ideal_box":     box,
+        "sample":        {"kind": "center_window", "size_frac": 1.0},
+    }
+    for rid, kind, box in _ARTIFACT_RAW
+]
