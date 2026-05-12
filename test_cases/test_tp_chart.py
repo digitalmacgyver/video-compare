@@ -213,6 +213,28 @@ def test_black_circle_catalog():
     assert bc["search_band_px"] >= 10
 
 
+def test_burst_regions_catalog():
+    ids = [r["id"] for r in tp_chart.BURST_REGIONS]
+    assert len(ids) == 8
+    expected = {"BURST_3p58", "BURST_4p43", "BURST_4p286_SECAM",
+                "BURST_300TVL_DIAG", "BURST_400TVL_DIAG",
+                "WEDGE_3MHz", "WEDGE_4MHz", "WEDGE_5MHz"}
+    assert set(ids) == expected
+    valid_kinds = {"burst_vertical", "burst_diagonal", "wedge_segment"}
+    for r in tp_chart.BURST_REGIONS:
+        assert r["kind"] in valid_kinds
+        assert r["frequency_MHz"] > 0
+        x, y, w, h = r["ideal_box"]
+        assert w > 0 and h > 0
+        assert 0 <= x and x + w <= 720
+        assert 0 <= y and y + h <= 486
+        # 4:2:2 alignment: x and w must be even.
+        assert x % 2 == 0
+        assert w % 2 == 0
+        if r["kind"] == "burst_diagonal":
+            assert "stripe_angle_deg" in r
+
+
 TESTS = [
     test_constants_exist,
     test_rgb_norm_to_yuv10_black,
@@ -232,6 +254,7 @@ TESTS = [
     test_boundary_triangles_back_corner_spacing,
     test_registration_cross_catalog,
     test_black_circle_catalog,
+    test_burst_regions_catalog,
 ]
 
 

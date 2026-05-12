@@ -368,3 +368,45 @@ BLACK_CIRCLE = {
     "ring_thickness_px": 3,
     "search_band_px": 15,
 }
+
+
+# =====================================================================
+# BURST / WEDGE REGIONS (Stage 3 — frequency response)
+# =====================================================================
+#
+# Frequency probes drawn elsewhere on the chart. Each region is sampled
+# (after Stage 2 affine) and FFT-analyzed by tp_freq.measure().
+#
+# Coordinates here are initial values picked from docs/sw2_chart_layout.md;
+# operator calibration via tp_calibrate.py --preset stage3-bursts can refine
+# them on real captures.
+
+NTSC_SAMPLE_RATE_MHZ = 13.5  # horizontal sample rate for NTSC SDI 720-wide
+
+# 300/400 tvl diagonal bursts: TVL maps to horizontal frequency at
+# fs/(2 * picture_width_px / tvl) ≈ ; we use plausible nominal values that
+# match the labels visible on the chart. The classifier doesn't depend on
+# absolute frequency, only relative modulation across regions.
+_BURST_RAW = [
+    # (id,                kind,             freq_MHz, ideal_box,         extras)
+    ("BURST_3p58",        "burst_vertical", 3.58,     (70, 61, 40, 40),  {}),
+    ("BURST_4p43",        "burst_vertical", 4.43,     (610, 61, 40, 40), {}),
+    ("BURST_4p286_SECAM", "burst_vertical", 4.286,    (70, 385, 40, 40), {}),
+    ("BURST_300TVL_DIAG", "burst_diagonal", 3.95,     (250, 61, 40, 40), {"stripe_angle_deg": 45}),
+    ("BURST_400TVL_DIAG", "burst_diagonal", 5.27,     (430, 61, 40, 40), {"stripe_angle_deg": 45}),
+    ("WEDGE_3MHz",        "wedge_segment",  3.0,      (550, 169, 40, 40), {}),
+    ("WEDGE_4MHz",        "wedge_segment",  4.0,      (550, 223, 40, 40), {}),
+    ("WEDGE_5MHz",        "wedge_segment",  5.0,      (550, 277, 40, 40), {}),
+]
+
+BURST_REGIONS = [
+    {
+        "id":            rid,
+        "kind":          kind,
+        "frequency_MHz": freq,
+        "ideal_box":     box,
+        "sample":        {"kind": "center_window", "size_frac": 0.6},
+        **extras,
+    }
+    for rid, kind, freq, box, extras in _BURST_RAW
+]
