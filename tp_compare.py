@@ -19,8 +19,15 @@ def _basename(path: str) -> str:
 
 
 def _th(label: str, tip: str) -> str:
-    """Column header with a hover tooltip explaining what the column means."""
-    return f'<th title="{_h.escape(tip)}">{label}</th>'
+    """Column header with a hover tooltip explaining what the column means.
+
+    Uses a CSS-driven popover (see `.tip:hover::after` in _CSS) for instant,
+    reliable display instead of the native `title=` attribute, which most
+    browsers show only after a ~1 s delay and dismiss after a few seconds.
+    aria-label is still set so screen readers get the explanation.
+    """
+    tip_esc = _h.escape(tip)
+    return f'<th class="tip" data-tip="{tip_esc}" aria-label="{tip_esc}">{label}</th>'
 
 
 # Friendly tooltips for tartan and gray region IDs. Keys are region ids,
@@ -329,7 +336,51 @@ p.legend { font-size: 12px; color: #b8c0cc; line-height: 1.6; }
 table.data { border-collapse: collapse; margin: 12px 0; }
 table.data th, table.data td { border: 1px solid #2a2e36; padding: 6px 10px; vertical-align: top; }
 table.data th { background: #21252b; color: #fff; }
-th[title] { cursor: help; border-bottom: 1px dotted #6a8aa0; }
+th.tip { position: relative; cursor: help; border-bottom: 1px dotted #6a8aa0; }
+th.tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #14171c;
+  color: #d8dde6;
+  border: 1px solid #4a5060;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: normal;
+  font-family: system-ui, sans-serif;
+  text-align: left;
+  white-space: normal;
+  width: max-content;
+  max-width: 320px;
+  line-height: 1.45;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  z-index: 100;
+}
+th.tip::before {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-bottom-color: #4a5060;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  z-index: 101;
+}
+th.tip:hover::after,
+th.tip:focus::after,
+th.tip:hover::before,
+th.tip:focus::before { visibility: visible; opacity: 1; }
 img.fiducial-crops { max-width: 100%; height: auto; margin-top: 6px;
   background: #14161a; border: 1px solid #2a2e36; image-rendering: pixelated; }
 .swatch { display: inline-block; width: 22px; height: 22px; vertical-align: middle; }
