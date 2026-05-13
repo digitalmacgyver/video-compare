@@ -215,12 +215,14 @@ def test_black_circle_catalog():
 
 def test_burst_regions_catalog():
     ids = [r["id"] for r in tp_chart.BURST_REGIONS]
-    assert len(ids) == 8
+    assert len(ids) == 11
     expected = {"BURST_3p58", "BURST_4p43", "BURST_4p286_SECAM",
                 "BURST_300TVL_DIAG", "BURST_400TVL_DIAG",
-                "WEDGE_3MHz", "WEDGE_4MHz", "WEDGE_5MHz"}
+                "WEDGE_3MHz", "WEDGE_4MHz", "WEDGE_5MHz",
+                "YC_BURST_1p0MHZ", "YC_BURST_0p5MHZ", "YC_BURST_1p5MHZ"}
     assert set(ids) == expected
-    valid_kinds = {"burst_vertical", "burst_diagonal", "wedge_segment"}
+    valid_kinds = {"burst_vertical", "burst_diagonal", "wedge_segment",
+                   "chroma_burst"}
     for r in tp_chart.BURST_REGIONS:
         assert r["kind"] in valid_kinds
         assert r["frequency_MHz"] > 0

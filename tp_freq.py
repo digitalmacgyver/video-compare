@@ -91,12 +91,90 @@ def _extract_line(win, kind, stripe_angle_deg=None):
     raise ValueError(f"unknown burst kind: {kind}")
 
 
+def _crop_chroma(U, V, box):
+    """Crop U and V at half-x for a luma-coord box. Returns (U_win, V_win)
+    each as float32, or (None, None) if the crop falls fully outside."""
+    x, y, w, h = box
+    h_lim, w_lim = U.shape
+    x0 = max(0, x // 2)
+    y0 = max(0, y)
+    x1 = min(w_lim, (x + w + 1) // 2)
+    y1 = min(h_lim, y + h)
+    if x1 <= x0 or y1 <= y0:
+        return None, None
+    return U[y0:y1, x0:x1].astype(np.float32), V[y0:y1, x0:x1].astype(np.float32)
+
+
+def _measure_chroma_burst(r, Y, U, V, box):
+    """Return chroma modulation + luma cross-modulation at the burst's
+    expected frequency. Chroma is the sqrt(U^2+V^2) magnitude (with each
+    plane recentred at the chroma neutral 512); luma is plain Y."""
+    chroma_sample_rate = tp_chart.NTSC_SAMPLE_RATE_MHZ / 2.0  # 6.75 MHz
+    freq_MHz = r["frequency_MHz"]
+    win_y = _crop(Y, box)
+    win_u, win_v = _crop_chroma(U, V, box)
+    if win_y is None or win_y.size == 0 or win_u is None:
+        return None
+    # FFT U and V separately and take the axis with the larger modulation.
+    # Magnitude-sqrt(U^2+V^2) does NOT modulate between opposing colors
+    # (red/cyan have the same chroma magnitude, just different
+    # directions), so per-axis FFTs are required to detect the burst.
+    u_line = win_u[win_u.shape[0] // 2, :].astype(np.float32) - tp_chart.CHROMA_CENTER
+    v_line = win_v[win_v.shape[0] // 2, :].astype(np.float32) - tp_chart.CHROMA_CENTER
+    u_peak, _, u_snr = _line_modulation(u_line, freq_MHz, chroma_sample_rate)
+    v_peak, _, v_snr = _line_modulation(v_line, freq_MHz, chroma_sample_rate)
+    if u_peak >= v_peak:
+        chroma_peak_pp, chroma_snr = u_peak, u_snr
+        chroma_detected = freq_MHz  # detected freq lookup is in _line_modulation; use expected
+    else:
+        chroma_peak_pp, chroma_snr = v_peak, v_snr
+        chroma_detected = freq_MHz
+    # Luma line at chart sample rate, same expected frequency. Non-zero
+    # luma modulation here is cross-luma / dot-crawl injected by the
+    # decoder at the chroma transitions.
+    y_line = win_y[win_y.shape[0] // 2, :]
+    luma_peak_pp, luma_detected, luma_snr = _line_modulation(
+        y_line, freq_MHz, tp_chart.NTSC_SAMPLE_RATE_MHZ
+    )
+    # Normalize chroma_pct against full chroma swing (896 codes per axis,
+    # so magnitude ~ 896 for fully-saturated alternation).
+    chroma_full = 896.0
+    chroma_pct = 100.0 * chroma_peak_pp / chroma_full
+    chroma_db = (
+        20.0 * math.log10(chroma_pct / 100.0) if chroma_pct > 0 else float("-inf")
+    )
+    luma_full = float(tp_chart.WHITE_Y10 - tp_chart.BLACK_Y10)
+    luma_pct = 100.0 * luma_peak_pp / luma_full
+    return {
+        "frequency_MHz_expected":      freq_MHz,
+        "chroma_modulation_pct":       float(chroma_pct),
+        "chroma_modulation_db":        float(chroma_db),
+        "chroma_frequency_MHz_detected": float(chroma_detected),
+        "chroma_snr_db":               float(chroma_snr),
+        "luma_dot_crawl_pct":          float(luma_pct),
+        "luma_frequency_MHz_detected": float(luma_detected),
+        "sample_box_capture":          list(box),
+    }
+
+
 def measure(Y, U, V, affine):
     contrast_full = float(tp_chart.WHITE_Y10 - tp_chart.BLACK_Y10)  # 876
     sample_rate = tp_chart.NTSC_SAMPLE_RATE_MHZ
     regions_out = {}
     for r in tp_chart.BURST_REGIONS:
         box = _sample_box_capture(affine, r["ideal_box"])
+        if r["kind"] == "chroma_burst":
+            entry = _measure_chroma_burst(r, Y, U, V, box)
+            if entry is None:
+                entry = {
+                    "frequency_MHz_expected": r["frequency_MHz"],
+                    "chroma_modulation_pct":  0.0,
+                    "luma_dot_crawl_pct":     0.0,
+                    "sample_box_capture":     list(box),
+                    "error":                  "out_of_frame",
+                }
+            regions_out[r["id"]] = entry
+            continue
         win = _crop(Y, box)
         if win is None or win.size == 0:
             regions_out[r["id"]] = {
@@ -129,9 +207,13 @@ def measure(Y, U, V, affine):
 
 
 def _summarize(regions_out):
+    # The luma_response_curve only includes Y-plane bursts. Chroma bursts
+    # (Y/C timing) are reported separately because their amplitude is in
+    # different units (chroma codes vs luma codes).
     curve = sorted(
         ((d["frequency_MHz_expected"], d["modulation_db"])
-         for d in regions_out.values()),
+         for d in regions_out.values()
+         if "modulation_db" in d),
         key=lambda p: p[0],
     )
 

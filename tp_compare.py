@@ -834,6 +834,45 @@ def render_frequency_response(captures: List[Dict[str, Any]]) -> str:
             "label": name,
             "data": [{"x": float(f), "y": float(d)} for f, d in curve],
         })
+    # Y/C timing burst table: per-clip chroma + dot-crawl per frequency.
+    yc_freqs = ("YC_BURST_0p5MHZ", "YC_BURST_1p0MHZ", "YC_BURST_1p5MHZ")
+    has_yc = any(
+        ((c.get("frequency_response") or {}).get("regions") or {}).get(rid)
+        for c in captures for rid in yc_freqs
+    )
+    if has_yc:
+        rows.append("<h3>Y/C timing bursts (row 9 chroma)</h3>")
+        rows.append(
+            '<table class="freq-table"><thead><tr>'
+            + _th("Clip", "Capture file name.")
+            + _th("0.5 MHz chroma",
+                  "Peak chroma modulation at 0.5 MHz in cells (9,6-7) "
+                  "(blue/yellow stripes). Higher = wider chroma bandwidth.")
+            + _th("0.5 MHz dot crawl",
+                  "Luma modulation at 0.5 MHz in the same region. "
+                  "On the chart the colors also alternate in luma, so "
+                  "this is high even on a clean decoder; compare to "
+                  "the chroma value -- a clean decoder reproduces both "
+                  "in lockstep. Excess luma vs chroma = cross-luma.")
+            + _th("1.0 MHz chroma", "Peak chroma modulation at 1.0 MHz in cell (9,5).")
+            + _th("1.0 MHz dot crawl", "Luma modulation at 1.0 MHz in cell (9,5).")
+            + _th("1.5 MHz chroma", "Peak chroma modulation at 1.5 MHz in cell (9,8).")
+            + _th("1.5 MHz dot crawl", "Luma modulation at 1.5 MHz in cell (9,8).")
+            + "</tr></thead><tbody>"
+        )
+        for c in captures:
+            regs = ((c.get("frequency_response") or {}).get("regions") or {})
+            name = _basename(c["_meta"].get("capture", "?"))
+            cells = [f"<td>{_h.escape(name)}</td>"]
+            for rid in yc_freqs:
+                r = regs.get(rid, {})
+                ch = r.get("chroma_modulation_pct", 0.0)
+                lu = r.get("luma_dot_crawl_pct", 0.0)
+                cells.append(f"<td>{ch:.1f}%</td>")
+                cells.append(f"<td>{lu:.1f}%</td>")
+            rows.append("<tr>" + "".join(cells) + "</tr>")
+        rows.append("</tbody></table>")
+
     rows.append('<canvas id="freqChart" height="160"></canvas>')
     rows.append("<script>")
     rows.append(f"const FREQ_DATA = {json.dumps(datasets)};")

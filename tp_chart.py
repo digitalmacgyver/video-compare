@@ -409,6 +409,17 @@ _BURST_RAW = [
     ("WEDGE_3MHz",        "wedge_segment",  3.0,      (556, 175, 28, 28), {}),
     ("WEDGE_4MHz",        "wedge_segment",  4.0,      (556, 229, 28, 28), {}),
     ("WEDGE_5MHz",        "wedge_segment",  5.0,      (556, 283, 28, 28), {}),
+    # Row-9 Y/C timing chroma bursts (alternating chroma stripes at the
+    # labeled frequency). Used to measure chroma bandwidth AND the cross-
+    # luma (dot-crawl) that the decoder injects at chroma transitions.
+    # 0.5 MHz (cells 9,6-7) is blue/yellow alternation; 1.0/1.5 MHz
+    # (cells 9,5 and 9,8) are red/cyan alternation.
+    ("YC_BURST_1p0MHZ",   "chroma_burst",   1.0,      (252, 446, 36, 28),
+        {"color_pair": "red_cyan"}),
+    ("YC_BURST_0p5MHZ",   "chroma_burst",   0.5,      (312, 446, 96, 28),
+        {"color_pair": "blue_yellow"}),
+    ("YC_BURST_1p5MHZ",   "chroma_burst",   1.5,      (432, 446, 36, 28),
+        {"color_pair": "red_cyan"}),
 ]
 
 BURST_REGIONS = [

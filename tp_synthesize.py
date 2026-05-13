@@ -120,6 +120,41 @@ def _draw_saturated_chroma_blocks(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -
         _fill_box_yuv422(Y, U, V, (i * 60, 432, 60, 54), y10, u10, v10)
 
 
+_YC_COLOR_PAIRS = {
+    "red_cyan":    ((1.0, 0.0, 0.0), (0.0, 1.0, 1.0)),
+    "blue_yellow": ((0.0, 0.0, 1.0), (1.0, 1.0, 0.0)),
+}
+
+
+def _draw_chroma_bursts(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> None:
+    """Render the row-9 Y/C timing bursts: alternating colored stripes at
+    the labeled chroma frequency. Both Y and chroma alternate together
+    (the chart uses high-contrast color pairs like red/cyan and
+    blue/yellow), so a Y/C-timing-aligned decoder reproduces the stripes
+    cleanly while a misaligned one shows chroma offset from the luma."""
+    for r in tp_chart.BURST_REGIONS:
+        if r["kind"] != "chroma_burst":
+            continue
+        x, y, w, h = r["ideal_box"]
+        period_luma = tp_chart.NTSC_SAMPLE_RATE_MHZ / r["frequency_MHz"]
+        pair = _YC_COLOR_PAIRS[r["color_pair"]]
+        yA, uA, vA = tp_chart.rgb_norm_to_yuv10(*pair[0])
+        yB, uB, vB = tp_chart.rgb_norm_to_yuv10(*pair[1])
+        xs_luma = np.arange(w, dtype=np.float32)
+        phase_luma = 2.0 * np.pi * xs_luma / period_luma
+        sel_luma = np.sin(phase_luma) >= 0
+        stripe_y = np.where(sel_luma, yA, yB).astype(np.uint16)
+        Y[y:y + h, x:x + w] = stripe_y[None, :]
+        # U/V are half-x sampled; each chroma sample covers 2 luma px.
+        xs_chroma = np.arange(w // 2, dtype=np.float32)
+        phase_chroma = 2.0 * np.pi * (xs_chroma * 2) / period_luma
+        sel_chroma = np.sin(phase_chroma) >= 0
+        stripe_u = np.where(sel_chroma, uA, uB).astype(np.uint16)
+        stripe_v = np.where(sel_chroma, vA, vB).astype(np.uint16)
+        U[y:y + h, x // 2:(x + w) // 2] = stripe_u[None, :]
+        V[y:y + h, x // 2:(x + w) // 2] = stripe_v[None, :]
+
+
 def _draw_bursts(Y: np.ndarray) -> None:
     """Render BURST_REGIONS as black/white stripes at the chart frequency.
 
@@ -207,6 +242,7 @@ def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndar
     _draw_gray_strip(Y, U, V)
     _draw_bursts(Y)
     _draw_saturated_chroma_blocks(Y, U, V)
+    _draw_chroma_bursts(Y, U, V)
     _draw_boundary_triangles(Y)
     _draw_black_circle(Y)
     _draw_registration_cross(Y)
