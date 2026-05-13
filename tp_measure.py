@@ -10,6 +10,7 @@ CLI:
 
 from __future__ import annotations
 import json
+import os
 import subprocess
 from typing import Any, Dict, Tuple
 
@@ -471,6 +472,8 @@ def _main():
     p.add_argument("capture", help="path to capture (mov/avi/mkv/...)")
     p.add_argument("--frame", type=int, default=60, help="frame index (default 60)")
     p.add_argument("--output", required=True, help="output JSON path")
+    p.add_argument("--no-overlay", action="store_true",
+                   help="skip writing the sibling _overlay.png")
     args = p.parse_args()
     data = measure(args.capture, args.frame)
     with open(args.output, "w") as f:
@@ -480,6 +483,26 @@ def _main():
         f"registration={data['_meta']['registration']['quality_flag']}, "
         f"residuals_mean={data['_meta']['registration']['residuals_px']['mean']:.2f}px"
     )
+    if not args.no_overlay:
+        stem = os.path.splitext(args.output)[0]
+        try:
+            import tp_sample_overlay
+            import cv2
+            bgr = tp_sample_overlay.annotate(args.capture, args.output, args.frame)
+            overlay_path = stem + "_overlay.png"
+            cv2.imwrite(overlay_path, bgr)
+            print(f"wrote {overlay_path} ({bgr.shape[1]}x{bgr.shape[0]})")
+        except Exception as e:
+            print(f"WARNING: overlay PNG generation failed: {e}", file=sys.stderr)
+        try:
+            import tp_fiducial_crops
+            import cv2
+            fids_bgr = tp_fiducial_crops.build(args.capture, args.output, args.frame)
+            fids_path = stem + "_fiducials.png"
+            cv2.imwrite(fids_path, fids_bgr)
+            print(f"wrote {fids_path} ({fids_bgr.shape[1]}x{fids_bgr.shape[0]})")
+        except Exception as e:
+            print(f"WARNING: fiducial-crops PNG generation failed: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

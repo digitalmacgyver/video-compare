@@ -18,6 +18,65 @@ def _basename(path: str) -> str:
     return os.path.basename(path)
 
 
+def _th(label: str, tip: str) -> str:
+    """Column header with a hover tooltip explaining what the column means."""
+    return f'<th title="{_h.escape(tip)}">{label}</th>'
+
+
+# Friendly tooltips for tartan and gray region IDs. Keys are region ids,
+# values are short tooltip strings.
+_REGION_TOOLTIPS = {
+    "YEL":  "Top-row 75% yellow tartan patch (cell 1,1)",
+    "CYN":  "Top-row 75% cyan tartan patch (cell 1,1)",
+    "BLU":  "Top-row 75% blue tartan patch (cell 1,1)",
+    "RED":  "Top-row 75% red tartan patch (cell 1,1)",
+    "MAG":  "Bottom-row 75% magenta tartan patch (cell 1,1)",
+    "GRN":  "Bottom-row 75% green tartan patch (cell 1,1)",
+    "RED2": "Bottom-row 75% red tartan patch — duplicate color, position used for vertical-transition test",
+    "CYN2": "Bottom-row 75% cyan tartan patch — duplicate color",
+    "G1":   "20% IRE gray step (chart spec Y10≈239)",
+    "G2":   "40% IRE gray step (Y10≈414)",
+    "G3":   "60% IRE gray step (Y10≈590)",
+    "G4":   "80% IRE gray step (Y10≈765)",
+}
+
+
+def _region_th(rid: str) -> str:
+    tip = _REGION_TOOLTIPS.get(rid, f"Region {rid}")
+    return _th(rid, tip)
+
+
+def _render_fiducial_crops(capture: Dict[str, Any]) -> str:
+    """Embed the sibling _fiducials.png inline as a base64 data URL.
+
+    The PNG is produced by tp_measure (which calls tp_fiducial_crops.build)
+    next to the source JSON: <stem>_fiducials.png. Falls back to a muted
+    'not available' note if the file is missing — older JSONs predate the
+    fiducial-crops feature.
+    """
+    import base64
+    src = capture.get("_source_json_path")
+    if not src:
+        return ""
+    stem = os.path.splitext(src)[0]
+    png_path = stem + "_fiducials.png"
+    if not os.path.exists(png_path):
+        return (
+            "<h4>Fiducial crops</h4>"
+            f"<p class='muted small'>no fiducial-crops PNG at {_h.escape(png_path)}"
+            " — re-run tp_measure to generate.</p>"
+        )
+    with open(png_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("ascii")
+    return (
+        "<h4>Fiducial crops "
+        "<span class='small muted'>(green = back corner; orange = inferred apex; "
+        "yellow = detected apex; cyan = circle ring sample)</span></h4>"
+        f"<img class='fiducial-crops' "
+        f"src='data:image/png;base64,{b64}' alt='fiducial crops'/>"
+    )
+
+
 def render_registration_summary(captures: List[Dict[str, Any]]) -> str:
     rows = []
     for c in captures:
@@ -59,9 +118,14 @@ def render_registration_summary(captures: List[Dict[str, Any]]) -> str:
   <table class="data">
     <thead>
       <tr>
-        <th>Capture</th><th>Raster</th><th>Field</th>
-        <th>Quality</th><th>Mean&nbsp;px</th><th>Max&nbsp;px</th>
-        <th>Inliers</th><th>Affine</th>
+        {_th("Capture", "Capture file name (without directory).")}
+        {_th("Raster", "Detected video raster (width x height) before pad-to-486.")}
+        {_th("Field", "Field order from ffprobe (top, bottom, or progressive).")}
+        {_th("Quality", "Registration quality flag from Stage 2: ok / warn / failed. Based on how many landmarks fit the affine and how tight the residuals are.")}
+        {_th("Mean&nbsp;px", "Mean reprojection residual across RANSAC inliers, in pixels. Lower is better. Anything under 1 px is excellent; 1-2 px is warn; >2 is failed.")}
+        {_th("Max&nbsp;px", "Maximum reprojection residual across inliers, in pixels.")}
+        {_th("Inliers", "Number of grid landmarks plus Stage-2 anchors that the RANSAC affine fit accepted, vs. the total candidates available.")}
+        {_th("Affine", "Estimated affine mapping ideal chart coords -> capture coords. tx,ty=translation, sx,sy=scale, shear=off-diagonal shear.")}
       </tr>
     </thead>
     <tbody>
@@ -96,9 +160,13 @@ def render_tartan_deltas(captures: List[Dict[str, Any]]) -> str:
     # Use TARTAN_REGIONS as the canonical column ordering.
     region_ids = [r["id"] for r in tp_chart.TARTAN_REGIONS]
 
-    head = "<tr><th>Capture</th>" + "".join(
-        f"<th>{rid}</th>" for rid in region_ids
-    ) + "</tr>"
+    head = (
+        "<tr>"
+        + _th("Capture", "Capture file name. The cells show measured YUV deltas "
+                         "vs the 75% chart-spec ideal for each tartan patch.")
+        + "".join(_region_th(rid) for rid in region_ids)
+        + "</tr>"
+    )
 
     body_rows = []
     for c in captures:
@@ -154,9 +222,13 @@ def render_tartan_deltas(captures: List[Dict[str, Any]]) -> str:
 
 def render_gray_deltas(captures: List[Dict[str, Any]]) -> str:
     region_ids = [r["id"] for r in tp_chart.GRAY_REGIONS]
-    head = "<tr><th>Capture</th>" + "".join(
-        f"<th>{rid}</th>" for rid in region_ids
-    ) + "</tr>"
+    head = (
+        "<tr>"
+        + _th("Capture", "Capture file name. Cells show measured Y10 vs "
+                         "ideal Y10 for each 20/40/60/80% IRE gray step.")
+        + "".join(_region_th(rid) for rid in region_ids)
+        + "</tr>"
+    )
 
     body_rows = []
     for c in captures:
@@ -257,6 +329,9 @@ p.legend { font-size: 12px; color: #b8c0cc; line-height: 1.6; }
 table.data { border-collapse: collapse; margin: 12px 0; }
 table.data th, table.data td { border: 1px solid #2a2e36; padding: 6px 10px; vertical-align: top; }
 table.data th { background: #21252b; color: #fff; }
+th[title] { cursor: help; border-bottom: 1px dotted #6a8aa0; }
+img.fiducial-crops { max-width: 100%; height: auto; margin-top: 6px;
+  background: #14161a; border: 1px solid #2a2e36; image-rendering: pixelated; }
 .swatch { display: inline-block; width: 22px; height: 22px; vertical-align: middle; }
 .swatch-ideal    { border: 2px dashed #c5d1e0; box-sizing: border-box; }
 .swatch-measured { border: 2px solid  #f0b450; box-sizing: border-box; }
@@ -360,14 +435,14 @@ def render_luma_scale_analysis(captures: List[Dict[str, Any]]) -> str:
   <table class="data luma-table">
     <thead>
       <tr>
-        <th>Capture</th>
-        <th>Slope</th>
-        <th>Intercept</th>
-        <th>Predicted at black (Y10=64)</th>
-        <th>Predicted at white (Y10=940)</th>
-        <th>Linear-fit RMS</th>
-        <th>Pedestal&nbsp;A / B RMS</th>
-        <th>Verdict</th>
+        {_th("Capture", "Capture file name.")}
+        {_th("Slope", "Slope from a least-squares fit of measured Y10 vs ideal Y10 on the 4 gray steps. Slope=1.0 means unity luma gain.")}
+        {_th("Intercept", "Intercept of the same linear fit (Y10 codes). 0 means no DC offset; positive raises black level.")}
+        {_th("Predicted at black (Y10=64)", "What the linear fit predicts the measured Y10 would be at the chart's nominal black level (64).")}
+        {_th("Predicted at white (Y10=940)", "What the linear fit predicts at chart white (940).")}
+        {_th("Linear-fit RMS", "Root-mean-square residual of the 4 gray points against the linear fit. Lower means the gray ramp is more linear.")}
+        {_th("Pedestal&nbsp;A / B RMS", "RMS residual against pedestal-mismatch hypotheses A and B (alternative explanations to a pure gain change).")}
+        {_th("Verdict", "Heuristic interpretation: luma gain off, pedestal mismatch, or clean. Based on slope and the residuals above.")}
       </tr>
     </thead>
     <tbody>
@@ -409,8 +484,12 @@ def render_geometry_section(captures: List[Dict[str, Any]]) -> str:
             skew = d.get("corner_skew_px", {})
             box_html = (
                 f"<table class='geo-table'>"
-                f"<tr><th>top</th><th>left</th><th>bottom</th><th>right</th>"
-                f"<th>w&times;h</th></tr>"
+                f"<tr>"
+                f"{_th('top', 'Y coord of the active picture top edge (mean of TL/TR detected apex y).')}"
+                f"{_th('left', 'X coord of the active picture left edge (mean of TL/BL detected apex x).')}"
+                f"{_th('bottom', 'Y coord of the active picture bottom edge.')}"
+                f"{_th('right', 'X coord of the active picture right edge.')}"
+                f"{_th('w&times;h', 'Picture width x height in pixels.')}</tr>"
                 f"<tr><td>{box['top']:.1f}</td><td>{box['left']:.1f}</td>"
                 f"<td>{box['bottom']:.1f}</td><td>{box['right']:.1f}</td>"
                 f"<td>{d['picture_extent_px']['width']:.1f}&times;"
@@ -443,8 +522,10 @@ def render_geometry_section(captures: List[Dict[str, Any]]) -> str:
                 f"<td>{_h.escape(interp)}</td></tr>"
             )
         clip_html = (
-            f"<table class='geo-table'><tr><th>Corner</th>"
-            f"<th>Apex</th><th>Interpretation</th></tr>"
+            f"<table class='geo-table'><tr>"
+            f"{_th('Corner', 'Boundary triangle corner ID: TL/TR/BL/BR.')}"
+            f"{_th('Apex', 'Whether the triangle apex was detected within the frame. clipped = apex appears off-frame (chart was zoomed/cropped in capture).')}"
+            f"{_th('Interpretation', 'Human-readable explanation of any apex-clipping.')}</tr>"
             + "".join(clip_rows) + "</table>"
         )
 
@@ -486,6 +567,8 @@ def render_geometry_section(captures: List[Dict[str, Any]]) -> str:
             f"</div>"
         )
 
+        fids_html = _render_fiducial_crops(c)
+
         panels.append(
             f"<div class='geometry-panel'>"
             f"<h3>{_h.escape(cap_name)} "
@@ -495,6 +578,7 @@ def render_geometry_section(captures: List[Dict[str, Any]]) -> str:
             f"<h4>Registration cross</h4>{cross_html}"
             f"<h4>Black circle</h4>{circle_html}"
             f"<h4>Refit benefit</h4>{refit_html}"
+            f"{fids_html}"
             f"</div>"
         )
 
@@ -663,8 +747,18 @@ def render_frequency_response(captures: List[Dict[str, Any]]) -> str:
     if not any(c.get("frequency_response") for c in captures):
         return ""
     rows = ['<section class="freq-response"><h2>Frequency response (Stage 3)</h2>']
-    rows.append('<table class="freq-table"><thead><tr><th>Clip</th>'
-                '<th>−3 dB (MHz)</th><th>−6 dB (MHz)</th></tr></thead><tbody>')
+    rows.append(
+        '<table class="freq-table"><thead><tr>'
+        + _th("Clip", "Capture file name.")
+        + _th("−3 dB (MHz)",
+              "Highest burst frequency where the luma modulation is still within -3 dB "
+              "of the chart-spec full contrast. Higher = wider luma bandwidth.")
+        + _th("−6 dB (MHz)",
+              "Highest burst frequency where luma modulation is within -6 dB. "
+              "Stricter cut-off than -3 dB; a useful proxy for the practical luma "
+              "resolution limit.")
+        + '</tr></thead><tbody>'
+    )
     for c in captures:
         fr = c.get("frequency_response") or {}
         s = (fr.get("summary") or {}) if isinstance(fr, dict) else {}
@@ -712,15 +806,34 @@ def render_artifacts(captures: List[Dict[str, Any]]) -> str:
     if not any(c.get("artifacts") for c in captures):
         return ""
     rows = ['<section class="artifacts"><h2>Decoder artifacts (Stage 3)</h2>']
-    rows.append('<table class="artifact-table"><thead><tr>'
-                '<th>Clip</th>'
-                '<th>Hanging dots (Y pp)</th>'
-                '<th>Dot crawl (chroma RMS)</th>'
-                '<th>Cross-color (chroma RMS)</th>'
-                '<th>Cross-luma (Y pp)</th>'
-                '<th>Zone-plate chroma RMS</th>'
-                '<th>ZP chroma present?</th>'
-                '</tr></thead><tbody>')
+    rows.append(
+        '<table class="artifact-table"><thead><tr>'
+        + _th("Clip", "Capture file name.")
+        + _th("Hanging dots (Y pp)",
+              "Peak-to-peak luma modulation in the grey strip just above a chroma "
+              "block (row-8 cells adjacent to red/magenta). High values indicate "
+              "cross-luma at the subcarrier — a line-comb decoder signature.")
+        + _th("Dot crawl (chroma RMS)",
+              "Chroma RMS in the grey region just below the tartan bars. "
+              "Spurious chroma here means the decoder spreads cross-color away "
+              "from sharp chroma edges.")
+        + _th("Cross-color (chroma RMS)",
+              "Chroma RMS inside luma-only burst regions (B&W stripes that "
+              "should have zero chroma). Notch/simple decoders mistake high-freq "
+              "luma for chroma here.")
+        + _th("Cross-luma (Y pp)",
+              "Luma modulation at subcarrier (3-4 MHz bandpass) inside flat "
+              "chroma blocks. Indicates the decoder is mistaking subcarrier "
+              "for luma detail.")
+        + _th("Zone-plate chroma RMS",
+              "Chroma RMS over the moving zone-plate container (cells 3,4-6,9). "
+              "The zone plate is luma-only on the chart; any chroma here is "
+              "decoder-introduced cross-color.")
+        + _th("ZP chroma present?",
+              "Binary flag: zone-plate chroma RMS exceeds T_zp_threshold (=15 codes). "
+              "YES is a strong indicator of a notch/simple decoder.")
+        + '</tr></thead><tbody>'
+    )
     for c in captures:
         a = c.get("artifacts") or {}
         s = (a.get("summary") or {}) if isinstance(a, dict) else {}
@@ -745,10 +858,22 @@ def render_decoder_class(captures: List[Dict[str, Any]]) -> str:
     if not any(c.get("decoder_class") for c in captures):
         return ""
     rows = ['<section class="decoder-class"><h2>Decoder class (Stage 3)</h2>']
-    rows.append('<table class="decoder-table"><thead><tr>'
-                '<th>Clip</th><th>Class</th><th>Confidence</th>'
-                '<th>Candidate confidences</th>'
-                '</tr></thead><tbody>')
+    rows.append(
+        '<table class="decoder-table"><thead><tr>'
+        + _th("Clip", "Capture file name.")
+        + _th("Class",
+              "Inferred decoder class: notch (simple low-pass), line_comb, "
+              "temporal_comb_or_adaptive (cleanest — cannot distinguish "
+              "temporal vs adaptive without zone-plate motion analysis), "
+              "or undetermined (no rule above 0.5 confidence).")
+        + _th("Confidence",
+              "Geometric mean of per-metric confidences for the winning rule. "
+              "Range 0..1. Below 0.5 yields 'undetermined'.")
+        + _th("Candidate confidences",
+              "Confidence for each of the three rules. Compare to see how "
+              "close the runner-up was.")
+        + '</tr></thead><tbody>'
+    )
     for c in captures:
         dc = c.get("decoder_class") or {}
         cls = dc.get("decoder_class", "—")
