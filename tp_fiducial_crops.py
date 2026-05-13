@@ -19,14 +19,23 @@ import tp_chart
 import tp_measure
 
 
-_SCALE_TRIANGLE = 6
-_SCALE_CROSS    = 6
-_SCALE_CIRCLE   = 6
-_CROP_HALF_TRI  = 24   # triangle crop is (2*half) x (2*half)
-_CROP_HALF_CR   = 24
-_CROP_HALF_BC   = 18
-_TILE_LABEL_H   = 28   # px tall label band above each tile
-_TILE_GAP       = 8
+_SCALE_TRIANGLE  = 6
+_SCALE_CROSS     = 6
+_SCALE_INTERSECT = 8   # circle-intersection tiles want more detail
+_CROP_HALF_TRI   = 24
+_CROP_HALF_CR    = 24
+_CROP_HALF_INT   = 14  # crop is 28x28 raw -> 224 scaled at 8x
+_TILE_LABEL_H    = 28
+_TILE_GAP        = 8
+# NTSC pixel aspect ratio: pixels are taller than wide when the 720x486
+# raster is displayed at 4:3 (PAR = 10/11). The chart's logically-round
+# ring therefore appears elliptical in raster coords, widened horizontally
+# by 11/10. Used for the fallback ring geometry when the detector hasn't
+# returned a fitted ellipse.
+_NTSC_PAR_X_OVER_Y = 11.0 / 10.0
+# Short arc segment drawn through each intersection (pixels of arc length
+# either side of the predicted intersection point).
+_ARC_HALF_LEN_PX = 18
 
 
 def _yuv_to_bgr(Y, U, V):
@@ -126,17 +135,118 @@ def _cross_tile(bgr, cross_data):
     return _label_tile(tile, lines, "RC registration cross")
 
 
-def _circle_sample_tile(bgr, label, cx, cy, expected_r):
-    """Crop around one of N/S/E/W points on the expected circle ring."""
-    tile, (x0, y0) = _crop(bgr, cx, cy, _CROP_HALF_BC)
+def _circle_intersection_tile(bgr, label, px, py,
+                              ring_cx, ring_cy, ring_rx, ring_ry):
+    """Crop around the predicted intersection of the chart ring with a grid
+    line, overlay a short arc segment of the predicted ellipse so the
+    operator can see whether the ring actually passes through this point."""
+    import math
+    import cv2
+    tile, (x0, y0) = _crop(bgr, px, py, _CROP_HALF_INT)
     if tile.size == 0:
         return None
-    tile = _scale_up(tile, _SCALE_CIRCLE)
-    s = _SCALE_CIRCLE
-    _draw_marker(tile, (cx - x0) * s, (cy - y0) * s,
-                 (255, 200, 0), radius=10, thickness=2)
-    lines = [f"({cx:.0f},{cy:.0f}) r_exp={expected_r:.0f}"]
-    return _label_tile(tile, lines, f"BC {label}")
+    tile = _scale_up(tile, _SCALE_INTERSECT)
+    s = _SCALE_INTERSECT
+    # Predicted intersection: small open marker in cyan-ish.
+    _draw_marker(tile, (px - x0) * s, (py - y0) * s,
+                 (255, 200, 0), radius=6, thickness=2)
+    # Short arc segment of the predicted ellipse through this intersection.
+    if ring_rx > 0 and ring_ry > 0:
+        angle_center = math.atan2(py - ring_cy, px - ring_cx)
+        r_avg = (ring_rx + ring_ry) / 2.0
+        dtheta = _ARC_HALF_LEN_PX / r_avg
+        n_arc = 41
+        for i in range(n_arc):
+            t = angle_center - dtheta + (2.0 * dtheta) * i / (n_arc - 1)
+            ax = ring_cx + ring_rx * math.cos(t)
+            ay = ring_cy + ring_ry * math.sin(t)
+            lx = (ax - x0) * s
+            ly = (ay - y0) * s
+            if 0 <= lx < tile.shape[1] and 0 <= ly < tile.shape[0]:
+                cv2.circle(tile, (int(round(lx)), int(round(ly))),
+                           2, (255, 200, 0), -1, cv2.LINE_AA)
+    lines = [f"intersection=({px:.1f},{py:.1f})"]
+    return _label_tile(tile, lines, label)
+
+
+def _resolve_ring_geometry(data):
+    """Return (cx, cy, rx, ry) in capture coords for the chart ring.
+
+    Uses the detected ellipse if present; otherwise projects the chart-spec
+    circle through the Stage 2 affine and applies NTSC 11:10 PAR scaling to
+    the x semi-axis (the captured ring is wider than tall on real rasters)."""
+    bc_cfg = tp_chart.BLACK_CIRCLE
+    geom = data.get("geometry") or {}
+    fids = geom.get("fiducials") or {}
+    bc_fid = fids.get("circle")
+    if bc_fid is not None:
+        cx, cy = bc_fid["center"]
+        r_min = float(bc_fid.get("rx", bc_cfg["expected_radius_px"]))
+        r_max = float(bc_fid.get("ry", bc_cfg["expected_radius_px"]))
+        # The detector orders axes as min/max from cv2.fitEllipse, not by
+        # x/y. Under NTSC PAR (and assuming the detector's rotation_deg is
+        # close to 0 / 180 i.e. axes are roughly aligned with the raster),
+        # the horizontal axis is the larger one. Map accordingly.
+        return float(cx), float(cy), r_max, r_min
+    affine = (data.get("_meta") or {}).get("registration", {}).get("affine")
+    ideal_cx, ideal_cy = bc_cfg["ideal_cx"], bc_cfg["ideal_cy"]
+    if affine:
+        M = affine
+        cx = M[0][0] * ideal_cx + M[0][1] * ideal_cy + M[0][2]
+        cy = M[1][0] * ideal_cx + M[1][1] * ideal_cy + M[1][2]
+    else:
+        cx, cy = ideal_cx, ideal_cy
+    r_y = float(bc_cfg["expected_radius_px"])
+    r_x = r_y * _NTSC_PAR_X_OVER_Y
+    return float(cx), float(cy), r_x, r_y
+
+
+def _circle_intersections(cx, cy, rx, ry):
+    """Compute the 8 vertical-grid-line and 10 horizontal-grid-line
+    intersections with the chart ring at the cells documented above.
+
+    Returns a list of (label, x, y) in capture coords. Skips any
+    intersection that would lie outside the ellipse (|dx|>=rx or |dy|>=ry).
+    """
+    import math
+    pts = []
+    # 8 vertical-line intersections: (x_grid, sign_for_y, label).
+    v_specs = [
+        (240, -1, "x=240 / row 1"),
+        (480, -1, "x=480 / row 1"),
+        (120, -1, "x=120 / row 3"),
+        (600, -1, "x=600 / row 3"),
+        (120, +1, "x=120 / row 7"),
+        (600, +1, "x=600 / row 7"),
+        (240, +1, "x=240 / row 9"),
+        (480, +1, "x=480 / row 9"),
+    ]
+    for x_grid, sgn, label in v_specs:
+        ratio = (x_grid - cx) / rx
+        if abs(ratio) >= 1.0:
+            continue
+        dy = ry * math.sqrt(max(0.0, 1.0 - ratio * ratio))
+        pts.append((label, float(x_grid), cy + sgn * dy))
+    # 10 horizontal-line intersections.
+    h_specs = [
+        (108, -1, "y=108 / col 3"),
+        (108, +1, "y=108 / col 10"),
+        (162, -1, "y=162 / col 2"),
+        (216, -1, "y=216 / col 2"),
+        (270, -1, "y=270 / col 2"),
+        (324, -1, "y=324 / col 2"),
+        (162, +1, "y=162 / col 11"),
+        (216, +1, "y=216 / col 11"),
+        (270, +1, "y=270 / col 11"),
+        (324, +1, "y=324 / col 11"),
+    ]
+    for y_grid, sgn, label in h_specs:
+        ratio = (y_grid - cy) / ry
+        if abs(ratio) >= 1.0:
+            continue
+        dx = rx * math.sqrt(max(0.0, 1.0 - ratio * ratio))
+        pts.append((label, cx + sgn * dx, float(y_grid)))
+    return pts
 
 
 def _compose_grid(tiles, ncols=4, bg=(20, 20, 25)):
@@ -190,29 +300,35 @@ def build(capture_path: str, json_path: str, frame_index: int = 60) -> np.ndarra
     if cross_tile is not None:
         tiles.append(cross_tile)
 
-    # Black-circle ring sample points (N/E/S/W on the expected ring).
-    bc_cfg = tp_chart.BLACK_CIRCLE
-    bc_fid = fids.get("circle")
-    if bc_fid is not None:
-        cx = bc_fid["center"][0]
-        cy = bc_fid["center"][1]
-        rx = bc_fid.get("rx", bc_cfg["expected_radius_px"])
-        ry = bc_fid.get("ry", bc_cfg["expected_radius_px"])
-    else:
-        cx, cy = bc_cfg["ideal_cx"], bc_cfg["ideal_cy"]
-        rx = ry = bc_cfg["expected_radius_px"]
-    samples = [
-        ("N", cx,      cy - ry, ry),
-        ("E", cx + rx, cy,      rx),
-        ("S", cx,      cy + ry, ry),
-        ("W", cx - rx, cy,      rx),
-    ]
-    for label, sx, sy, r_exp in samples:
-        tile = _circle_sample_tile(bgr, label, sx, sy, r_exp)
-        if tile is not None:
-            tiles.append(tile)
+    # Black-circle ring intersections with chart grid lines. These give
+    # 18 unambiguous sample points distributed around the ring at non-
+    # tangent angles, replacing the older cardinal N/S/E/W approach
+    # (which placed markers at the tangent extrema, where the ring's
+    # slope is locally flat and the top/bottom extrema merge with the
+    # picture frame).
+    cx, cy, ring_rx, ring_ry = _resolve_ring_geometry(data)
+    top_grid = _compose_grid(tiles, ncols=5)
 
-    return _compose_grid(tiles, ncols=4)
+    intersection_tiles = []
+    for label, px, py in _circle_intersections(cx, cy, ring_rx, ring_ry):
+        t = _circle_intersection_tile(bgr, label, px, py,
+                                      cx, cy, ring_rx, ring_ry)
+        if t is not None:
+            intersection_tiles.append(t)
+    bottom_grid = _compose_grid(intersection_tiles, ncols=6,
+                                 bg=(20, 20, 25))
+
+    if intersection_tiles:
+        # Stack the two composites vertically with a small separator band.
+        sep_h = _TILE_GAP * 2
+        h1, w1, _ = top_grid.shape
+        h2, w2, _ = bottom_grid.shape
+        max_w = max(w1, w2)
+        out = np.full((h1 + sep_h + h2, max_w, 3), 20, dtype=np.uint8)
+        out[:h1, :w1] = top_grid
+        out[h1 + sep_h:h1 + sep_h + h2, :w2] = bottom_grid
+        return out
+    return top_grid
 
 
 def _main():
