@@ -344,41 +344,106 @@ def _detect_registration_cross(Y, fid):
 
 
 def _detect_black_circle(Y, fid):
+    """Detect the chart's boundary ring as an ellipse.
+
+    Uses an elliptical annulus sized to the NTSC PAR (rx = ry * 11/10) so
+    the detector can capture the entire visible ring on real captures
+    (where the chart's logically-round ring appears elliptical due to
+    non-square raster pixels). The band is widened enough to also accept
+    a perfectly-round ring (the synthesized fixture is round), so the
+    same detector works for both synth and real captures."""
     import cv2
     h, w = Y.shape
     cx_ideal = fid["ideal_cx"]
     cy_ideal = fid["ideal_cy"]
-    r_ideal = fid["expected_radius_px"]
+    r_y_ideal = fid["expected_radius_px"]
+    r_x_ideal = r_y_ideal * tp_chart.NTSC_PAR_X_OVER_Y
     band = fid["search_band_px"]
-    # Annular mask: broad band used to catch all ring pixels.
     yy, xx = np.mgrid[0:h, 0:w]
-    dist = np.sqrt((xx - cx_ideal) ** 2 + (yy - cy_ideal) ** 2)
-    annulus = (dist >= (r_ideal - band)) & (dist <= (r_ideal + band))
+    # Normalized distance from the ideal ellipse (1.0 = exactly on it).
+    norm_dist = np.sqrt(
+        ((xx - cx_ideal) / r_x_ideal) ** 2 +
+        ((yy - cy_ideal) / r_y_ideal) ** 2
+    )
+    # Annulus half-width in normalized units. We widen beyond the spec
+    # `search_band_px` so the annulus also encloses a perfectly-round ring
+    # (synthesized fixture, radius 243): its x-extrema sit at norm_dist =
+    # 243/267 ~ 0.910, so we need at least 0.09 of headroom below 1.0.
+    band_norm = max(
+        band / r_y_ideal,
+        1.0 - 1.0 / tp_chart.NTSC_PAR_X_OVER_Y,
+    ) + 0.02
+    annulus = (norm_dist >= 1.0 - band_norm) & (norm_dist <= 1.0 + band_norm)
     threshold = 0.3 * tp_chart.GREY_BACKGROUND_Y10
     dark = (Y < threshold) & annulus
+    # Remove grid-line pixels that cross the annulus. Grid lines are long
+    # vertical/horizontal runs of dark pixels; the ring is a ~3-px-thick
+    # curved band. Morphological erosion with a long thin kernel survives
+    # only the long lines, which we then subtract from the dark mask.
+    long_kernel_v = np.ones((21, 1), np.uint8)
+    long_kernel_h = np.ones((1, 21), np.uint8)
+    dark_u8 = dark.astype(np.uint8)
+    grid_pixels = (cv2.erode(dark_u8, long_kernel_v) |
+                   cv2.erode(dark_u8, long_kernel_h)).astype(bool)
+    dark = dark & ~grid_pixels
     dark_count = int(dark.sum())
     if dark_count < 100:
         return None
     ys, xs = np.where(dark)
     if len(xs) < 5:
         return None
-    # Midline selection: bin dark pixels by angle; pick the one nearest the
-    # ideal radius in each angular bin. This gives one representative point
-    # per degree around the ring, unbiased by ring thickness.
-    actual_dist = np.sqrt((xs - cx_ideal) ** 2 + (ys - cy_ideal) ** 2)
-    dev_from_ideal = np.abs(actual_dist - r_ideal)
+    # Midline selection is a 2-pass process so the detector handles both
+    # round (synthesized) and PAR-elliptical (real-capture) rings cleanly:
+    #
+    # Pass 1 -- darkness-weighted centroid in each angular bin. Centroid
+    # respects the actual ring shape (round vs elliptical), but can be
+    # pulled off-ring by non-ring dark features (grid lines crossing the
+    # annulus, banner text). The fit is "directionally correct" but noisy.
+    #
+    # Pass 2 -- in each bin pick the dark pixel closest to the pass-1
+    # fitted ellipse. This rejects non-ring features (their pixels sit far
+    # from the pass-1 ring estimate), and because pass 1 was directionally
+    # correct, the pass-2 fit converges on the true ring.
     angles = np.arctan2(ys - cy_ideal, xs - cx_ideal)
+    actual_r = np.sqrt((xs - cx_ideal) ** 2 + (ys - cy_ideal) ** 2)
+    darkness = (threshold - Y[ys, xs].astype(np.float32)).clip(min=0)
     n_bins = 360
     bin_idx = ((angles + np.pi) / (2.0 * np.pi) * n_bins).astype(int) % n_bins
-    midline_xs = []
-    midline_ys = []
+
+    # Pass 1: darkness-weighted centroid per bin.
+    midline_xs, midline_ys = [], []
     for b in range(n_bins):
         mask = bin_idx == b
-        if mask.sum() == 0:
+        if not mask.any():
             continue
-        best = int(np.argmin(dev_from_ideal[mask]))
-        midline_xs.append(int(xs[mask][best]))
-        midline_ys.append(int(ys[mask][best]))
+        w_b = darkness[mask]
+        w_sum = float(w_b.sum())
+        if w_sum <= 0:
+            continue
+        midline_xs.append(float((xs[mask] * w_b).sum() / w_sum))
+        midline_ys.append(float((ys[mask] * w_b).sum() / w_sum))
+    if len(midline_xs) < 5:
+        return None
+    pts1 = np.column_stack([midline_xs, midline_ys]).astype(np.float32)
+    (cx1, cy1), (a1, b1), rot1 = cv2.fitEllipse(pts1)
+    rx1 = min(a1, b1) / 2.0
+    ry1 = max(a1, b1) / 2.0
+
+    # Pass 2: closest-to-fit per bin.
+    cos_t = np.cos(angles - np.deg2rad(rot1))
+    sin_t = np.sin(angles - np.deg2rad(rot1))
+    target_r = (rx1 * ry1) / np.sqrt(
+        (ry1 * cos_t) ** 2 + (rx1 * sin_t) ** 2 + 1e-9
+    )
+    dev = np.abs(actual_r - target_r)
+    midline_xs, midline_ys = [], []
+    for b in range(n_bins):
+        mask = bin_idx == b
+        if not mask.any():
+            continue
+        best = int(np.argmin(dev[mask]))
+        midline_xs.append(float(xs[mask][best]))
+        midline_ys.append(float(ys[mask][best]))
     if len(midline_xs) < 5:
         return None
     mxs = np.array(midline_xs, dtype=np.float32)

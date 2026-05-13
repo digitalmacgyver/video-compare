@@ -383,6 +383,14 @@ BLACK_CIRCLE = {
 
 NTSC_SAMPLE_RATE_MHZ = 13.5  # horizontal sample rate for NTSC SDI 720-wide
 
+# NTSC pixel aspect ratio: the 720x486 raster is displayed at 4:3, so each
+# pixel is taller than wide by 10/11. A chart pattern that is logically a
+# perfect circle therefore appears in raster coords as an ellipse with
+# horizontal semi-axis = vertical semi-axis * 11/10. Used by the black-
+# circle detector to size its elliptical annulus, and by tp_fiducial_crops
+# to predict the visible ring path when the detector returns None.
+NTSC_PAR_X_OVER_Y = 11.0 / 10.0
+
 # 300/400 tvl diagonal bursts: TVL maps to horizontal frequency at
 # fs/(2 * picture_width_px / tvl) ≈ ; we use plausible nominal values that
 # match the labels visible on the chart. The classifier doesn't depend on

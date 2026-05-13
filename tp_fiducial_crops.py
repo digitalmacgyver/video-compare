@@ -32,7 +32,7 @@ _TILE_GAP        = 8
 # ring therefore appears elliptical in raster coords, widened horizontally
 # by 11/10. Used for the fallback ring geometry when the detector hasn't
 # returned a fitted ellipse.
-_NTSC_PAR_X_OVER_Y = 11.0 / 10.0
+_NTSC_PAR_X_OVER_Y = tp_chart.NTSC_PAR_X_OVER_Y
 # Short arc segment drawn through each intersection (pixels of arc length
 # either side of the predicted intersection point).
 _ARC_HALF_LEN_PX = 18
