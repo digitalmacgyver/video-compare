@@ -93,6 +93,33 @@ def _cross_luma_sc_amp(y_win, sample_rate_MHz):
     return float(filt.max() - filt.min())
 
 
+def _wedge_hv_symmetry(y_win):
+    """Compare horizontal vs vertical luma modulation through the wedge
+    center. The radial wedge has black/white wedges radiating from its
+    centre; on a symmetric (aperture-balanced) decoder, the H and V
+    cross-sections through the centre carry equal modulation energy. A
+    decoder that applies more sharpening on one axis biases the ratio."""
+    if y_win is None or y_win.size < 4:
+        return None
+    cy = y_win.shape[0] // 2
+    cx = y_win.shape[1] // 2
+    h_line = y_win[cy, :].astype(np.float32)
+    v_line = y_win[:, cx].astype(np.float32)
+    h_line = h_line - h_line.mean()
+    v_line = v_line - v_line.mean()
+    h_std = float(h_line.std())
+    v_std = float(v_line.std())
+    if v_std > 1e-6:
+        hv_ratio = float(h_std / v_std)
+    else:
+        hv_ratio = None
+    return {
+        "h_modulation_std": h_std,
+        "v_modulation_std": v_std,
+        "hv_ratio":         hv_ratio,
+    }
+
+
 def measure(Y, U, V, affine):
     sample_rate = tp_chart.NTSC_SAMPLE_RATE_MHZ
     regions_out = {}
@@ -117,6 +144,10 @@ def measure(Y, U, V, affine):
             crms = _chroma_rms(uw, vw)
             entry["chroma_rms"] = crms
             entry["chroma_present"] = bool(crms > THRESHOLDS["T_zp_threshold"])
+        elif kind == "wedge_hv_symmetry":
+            sym = _wedge_hv_symmetry(yw)
+            if sym is not None:
+                entry.update(sym)
         regions_out[r["id"]] = entry
     return {
         "regions":    regions_out,

@@ -242,10 +242,11 @@ def test_artifact_regions_catalog():
     expected = {"HD_RED_TOP", "HD_MAGENTA_TOP", "DC_TARTAN_BELOW",
                 "XC_BURST_300TVL", "XC_BURST_400TVL", "XC_WEDGE_4MHz",
                 "XC_WEDGE_5MHz", "XL_RED_INTERIOR", "XL_MAGENTA_INTERIOR",
-                "ZP_CHROMA_LEAK"}
+                "ZP_CHROMA_LEAK", "XC_RADIAL_WEDGE", "WEDGE_HV_SYMMETRY"}
     assert set(ids) == expected
     valid_kinds = {"hanging_dots", "dot_crawl", "cross_color",
-                   "cross_luma", "zone_plate_chroma_leak"}
+                   "cross_luma", "zone_plate_chroma_leak",
+                   "wedge_hv_symmetry"}
     for r in tp_chart.ARTIFACT_REGIONS:
         assert r["artifact_kind"] in valid_kinds
         x, y, w, h = r["ideal_box"]

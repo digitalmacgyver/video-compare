@@ -463,6 +463,13 @@ _ARTIFACT_RAW = [
     ("XL_RED_INTERIOR",      "cross_luma",              (600, 445, 60,  30)),
     ("XL_MAGENTA_INTERIOR",  "cross_luma",              (130, 445, 40,  30)),
     ("ZP_CHROMA_LEAK",       "zone_plate_chroma_leak",  (180, 108, 360, 216)),
+    # Radial wedge in cell (8,11). Designed to expose decoder cross-color
+    # (the wedge is black/white only, so any chroma is decoder-induced)
+    # and horizontal/vertical enhancement asymmetry (a decoder that
+    # sharpens H more than V, or vice versa, shows different luma
+    # modulation along H vs V cross-sections through the wedge centre).
+    ("XC_RADIAL_WEDGE",      "cross_color",             (604, 384, 52, 44)),
+    ("WEDGE_HV_SYMMETRY",    "wedge_hv_symmetry",       (604, 384, 52, 44)),
 ]
 
 ARTIFACT_REGIONS = [

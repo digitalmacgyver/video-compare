@@ -944,6 +944,63 @@ def render_artifacts(captures: List[Dict[str, Any]]) -> str:
     return "\n".join(rows)
 
 
+def render_radial_wedge(captures: List[Dict[str, Any]]) -> str:
+    """Compact table for the radial wedge: cross-color (chroma RMS, since
+    the wedge is luma-only on the chart) and H/V symmetry of luma
+    modulation through the wedge centre."""
+    def _ok(c):
+        a = c.get("artifacts") or {}
+        regs = a.get("regions") if isinstance(a, dict) else None
+        if not regs:
+            return False
+        return ("WEDGE_HV_SYMMETRY" in regs) or ("XC_RADIAL_WEDGE" in regs)
+    if not any(_ok(c) for c in captures):
+        return ""
+    rows = ['<section class="radial-wedge">'
+            '<h2>Radial wedge (Stage 3)</h2>'
+            '<p class="legend">Cell (8,11). The wedge is black/white only, '
+            'so chroma here is decoder cross-color. H/V std compares luma '
+            'modulation along horizontal vs vertical cross-sections '
+            'through the wedge centre -- the ratio reveals decoder '
+            'aperture-correction asymmetry (1.0 = balanced).</p>']
+    rows.append(
+        '<table class="data wedge-table"><thead><tr>'
+        + _th("Clip", "Capture file name.")
+        + _th("Cross-color chroma RMS",
+              "Chroma RMS over the wedge box. The wedge has no native "
+              "chroma; any value here is decoder-injected cross-color.")
+        + _th("H modulation (std)",
+              "Standard deviation of the luma cross-section through the "
+              "wedge centre along the horizontal axis. Higher = more "
+              "high-spatial-frequency luma along H.")
+        + _th("V modulation (std)",
+              "Same metric along the vertical axis through wedge centre.")
+        + _th("H/V ratio",
+              "h_std / v_std. 1.0 = symmetric aperture. >1 = decoder "
+              "sharpens horizontally more than vertically; <1 = vice versa.")
+        + "</tr></thead><tbody>"
+    )
+    def _cell(v, fmt="{:.2f}"):
+        return f"<td>{fmt.format(v)}</td>" if v is not None else "<td>—</td>"
+    for c in captures:
+        a = c.get("artifacts") or {}
+        regs = (a.get("regions") or {}) if isinstance(a, dict) else {}
+        xc = regs.get("XC_RADIAL_WEDGE", {}).get("chroma_rms")
+        wsym = regs.get("WEDGE_HV_SYMMETRY", {})
+        h_std = wsym.get("h_modulation_std")
+        v_std = wsym.get("v_modulation_std")
+        hv = wsym.get("hv_ratio")
+        name = _basename(c["_meta"].get("capture", "?"))
+        rows.append(
+            "<tr>"
+            f"<td>{_h.escape(name)}</td>"
+            f"{_cell(xc)}{_cell(h_std)}{_cell(v_std)}{_cell(hv)}"
+            "</tr>"
+        )
+    rows.append("</tbody></table></section>")
+    return "\n".join(rows)
+
+
 def render_decoder_class(captures: List[Dict[str, Any]]) -> str:
     if not any(c.get("decoder_class") for c in captures):
         return ""
@@ -994,6 +1051,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_luma_scale_analysis(captures)
         + render_frequency_response(captures)
         + render_artifacts(captures)
+        + render_radial_wedge(captures)
         + render_decoder_class(captures)
         + render_sample_diagnostics(captures)
     )

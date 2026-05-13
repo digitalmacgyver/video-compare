@@ -59,12 +59,44 @@ def test_summary_keys_present():
         assert key in s, f"missing summary key: {key}"
 
 
+def test_wedge_hv_symmetry_baseline_flat_region():
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    out = tp_artifacts.measure(Y, U, V, _identity())
+    w = out["regions"]["WEDGE_HV_SYMMETRY"]
+    # Synth does not render the radial wedge yet, so cell (8,11) is
+    # plain grey + grid line. H and V std are tiny; ratio is undefined
+    # or near 1.0.
+    assert w.get("h_modulation_std", 0) < 50.0
+    assert w.get("v_modulation_std", 0) < 50.0
+
+
+def test_wedge_hv_symmetry_detects_h_only_pattern():
+    """Inject vertical stripes (high H modulation, zero V) into the wedge
+    region and confirm the detector reports hv_ratio >> 1."""
+    Y, U, V = tp_synthesize.synthesize(720, 486)
+    # Vertical stripes at 3 px period across the wedge box.
+    x, y, w, h = (604, 384, 52, 44)
+    cols = np.arange(w)
+    pattern = np.where(cols % 4 < 2, 64, 940).astype(np.uint16)
+    Y[y:y + h, x:x + w] = pattern[None, :]
+    out = tp_artifacts.measure(Y, U, V, _identity())
+    wsym = out["regions"]["WEDGE_HV_SYMMETRY"]
+    assert wsym["h_modulation_std"] > 100, wsym
+    assert wsym["v_modulation_std"] < 10, wsym
+    # With v ~ 0 the ratio is either None (formally undefined) or very
+    # large; either signals "H dominates V".
+    ratio = wsym["hv_ratio"]
+    assert ratio is None or ratio > 10, wsym
+
+
 TESTS = [
     test_artifacts_measure_returns_all_regions,
     test_zone_plate_chroma_leak_synthesized_is_low,
     test_zone_plate_chroma_leak_detects_injected_chroma,
     test_cross_color_metric_zero_on_synthesized_bursts,
     test_summary_keys_present,
+    test_wedge_hv_symmetry_baseline_flat_region,
+    test_wedge_hv_symmetry_detects_h_only_pattern,
 ]
 
 
