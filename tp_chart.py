@@ -455,7 +455,11 @@ _ARTIFACT_RAW = [
     ("HD_RED_TOP",           "hanging_dots",            (550, 427, 46, 5)),
     ("HD_MAGENTA_TOP",       "hanging_dots",            (10,  427, 46, 5)),
     ("DC_TARTAN_BELOW",      "dot_crawl",               (10,  64,  44,  40)),
-    # XC bursts sample the same boxes the BURST_REGIONS bursts cover.
+    # XC bursts sample the same boxes the BURST_REGIONS bursts cover so we
+    # have chroma-leak readings on all four row-2 frequency bursts plus
+    # the two highest-frequency wedge probes.
+    ("XC_BURST_3p58",        "cross_color",             (76,  67,  28,  28)),
+    ("XC_BURST_4p43",        "cross_color",             (616, 67,  28,  28)),
     ("XC_BURST_300TVL",      "cross_color",             (256, 67,  28,  28)),
     ("XC_BURST_400TVL",      "cross_color",             (436, 67,  28,  28)),
     ("XC_WEDGE_4MHz",        "cross_color",             (556, 229, 28,  28)),

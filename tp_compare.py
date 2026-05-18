@@ -185,6 +185,122 @@ def _sum_geom_metrics(summary: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def _score_geometry(c: Dict[str, Any]) -> float:
+    """0-100 composite. 100 = no detectable picture-in-raster distortion.
+    Penalties: arrowhead spacing error, scale error, keystone, circularity."""
+    g = c.get("geometry") or {}
+    summary = (g.get("derived") or {}).get("summary")
+    m = _sum_geom_metrics(summary)
+    if m["max_arrow_delta_px"] is None:
+        return float("nan")
+    pen = 0.0
+    pen += _clamp(m["max_arrow_delta_px"] * 4.0, 0, 40)
+    if m["h_scale_pct"] is not None:
+        pen += _clamp(abs(m["h_scale_pct"] - 100.0) * 3.0, 0, 15)
+    if m["v_scale_pct"] is not None:
+        pen += _clamp(abs(m["v_scale_pct"] - 100.0) * 3.0, 0, 15)
+    if m["keystone_max_px"] is not None:
+        pen += _clamp(m["keystone_max_px"] * 2.0, 0, 20)
+    if m["displayed_circularity"] is not None:
+        pen += _clamp(abs(m["displayed_circularity"] - 1.0) * 200.0, 0, 30)
+    return max(0.0, 100.0 - pen)
+
+
+def _score_color(c: Dict[str, Any]) -> float:
+    """0-100. 100 = every tartan patch matches its spec exactly."""
+    patches = c.get("tartan") or []
+    if not patches:
+        return float("nan")
+    mean_de = sum(_color_delta_e(p) for p in patches) / len(patches)
+    return max(0.0, 100.0 - _clamp(mean_de * 1.5, 0, 100))
+
+
+def _score_grayscale(c: Dict[str, Any]) -> float:
+    """0-100. 100 = grayscale lands exactly on the chart-spec curve with
+    no chroma cast."""
+    grays = c.get("grays") or []
+    if not grays:
+        return float("nan")
+    mean_abs_dy = sum(abs(g["delta_y10"]) for g in grays) / len(grays)
+    max_cast = max(_gray_chroma_cast(g) for g in grays)
+    pen = _clamp(mean_abs_dy * 2.5, 0, 80) + _clamp(max_cast * 0.6, 0, 20)
+    return max(0.0, 100.0 - pen)
+
+
+def _score_class(value) -> str:
+    """Class for a 0-100 score where higher is better."""
+    if value is None or (isinstance(value, float) and value != value):
+        return ""
+    if value >= 85:
+        return "delta-good"
+    if value >= 60:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
+    """Composite scoreboard at the very top of the report. One row per
+    capture, with per-category 0-100 scores and an overall (mean of the
+    available categories). Sortable so you can rank processors on any
+    dimension."""
+    head = (
+        "<tr>"
+        + _sortable_th("Capture",
+                       "Capture file name.", kind="text")
+        + _sortable_th("Geometry",
+                       "0-100 score combining arrowhead-spacing error, "
+                       "picture scale, keystone, and PAR-aware "
+                       "circularity. Higher = closer to a perfect raster.")
+        + _sortable_th("Color",
+                       "0-100 score from the mean Euclidean YUV10 distance "
+                       "between the 8 tartan patches and chart spec. "
+                       "Higher = better color match.")
+        + _sortable_th("Grayscale",
+                       "0-100 score from mean |ΔY| across the 4 IRE steps, "
+                       "with an extra penalty for chroma cast on neutral "
+                       "patches.")
+        + _sortable_th("Overall",
+                       "Mean of the available category scores.")
+        + "</tr>"
+    )
+    rows = []
+    for c in captures:
+        name = _basename(c["_meta"]["capture"])
+        g  = _score_geometry(c)
+        co = _score_color(c)
+        gs = _score_grayscale(c)
+        vals = [v for v in (g, co, gs)
+                if v is not None and not (isinstance(v, float) and v != v)]
+        overall = sum(vals) / len(vals) if vals else float("nan")
+        cells = [
+            _td_name(name),
+            _td_num(g,       "{:.1f}", cls=_score_class(g)),
+            _td_num(co,      "{:.1f}", cls=_score_class(co)),
+            _td_num(gs,      "{:.1f}", cls=_score_class(gs)),
+            _td_num(overall, "{:.1f}", cls=_score_class(overall)),
+        ]
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"""
+<section class="overview overall">
+  <h2>Overall Summary</h2>
+  <p class="legend">
+    Composite at-a-glance scores per processor. Each category is on a
+    0-100 scale where 100 = no measurable error. Click any column to
+    rank. See the per-section overviews below for the underlying
+    numbers.
+  </p>
+  <table class="overview-table">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
 def render_geometry_overview(captures: List[Dict[str, Any]]) -> str:
     head = (
         "<tr>"
@@ -585,6 +701,305 @@ def _render_gray_panel(c: Dict[str, Any]) -> str:
     )
 
 
+# ---------------------------------------------------------------------
+# Frequency response section (layperson view of the row-2 bursts).
+# ---------------------------------------------------------------------
+
+# Row-2 frequency-response bursts in display order. Each entry pairs the
+# luma burst id (from BURST_REGIONS) with the matching cross-color
+# artifact id (from ARTIFACT_REGIONS) so we can join luma modulation and
+# chroma leak in one row.
+FREQ_BURST_REGIONS = [
+    {"id": "BURST_3p58",         "xc_id": "XC_BURST_3p58",
+     "label": "3.58 MHz vertical",
+     "blurb": "NTSC color subcarrier. Luma-only bars at the exact "
+              "frequency the decoder's chroma filter is tuned to — a "
+              "stress test for Y/C separation."},
+    {"id": "BURST_300TVL_DIAG",  "xc_id": "XC_BURST_300TVL",
+     "label": "300 TVL diagonal",
+     "blurb": "300 TV-lines of resolution drawn as a diagonal grid. "
+              "Tests how well the decoder preserves resolution off-axis "
+              "(where 1-D line combs lose information)."},
+    {"id": "BURST_400TVL_DIAG",  "xc_id": "XC_BURST_400TVL",
+     "label": "400 TVL diagonal",
+     "blurb": "400 TV-lines (~5.27 MHz horizontal). Past the analog "
+              "decoder's design bandwidth — luma should still be visible, "
+              "chroma leak should still be zero."},
+    {"id": "BURST_4p43",         "xc_id": "XC_BURST_4p43",
+     "label": "4.43 MHz vertical",
+     "blurb": "PAL color subcarrier. Luma-only bars at the PAL chroma "
+              "frequency. On an NTSC decoder this should pass through "
+              "as pure luma; on a multistandard decoder it doubles as a "
+              "second Y/C separation check."},
+]
+
+
+_SYNTH_FRAME_CACHE = None
+
+
+def _synth_frame_bgr():
+    """Render tp_synthesize.synthesize() once and cache the BGR8 frame
+    used to crop reference burst thumbnails."""
+    global _SYNTH_FRAME_CACHE
+    if _SYNTH_FRAME_CACHE is None:
+        import tp_synthesize
+        Y, U, V = tp_synthesize.synthesize()
+        _SYNTH_FRAME_CACHE = tp_synthesize._yuv422p10_to_bgr8(Y, U, V)
+    return _SYNTH_FRAME_CACHE
+
+
+def _bgr_crop_to_png_data_url(bgr, box, upscale: int = 4) -> str:
+    """Crop bgr[y:y+h, x:x+w], upscale by integer factor, return a
+    data:image/png;base64 URL."""
+    import base64
+    import cv2
+    x, y, w, h = box
+    crop = bgr[y:y + h, x:x + w]
+    if upscale > 1:
+        crop = cv2.resize(crop, (w * upscale, h * upscale),
+                          interpolation=cv2.INTER_NEAREST)
+    ok, png = cv2.imencode(".png", crop)
+    if not ok:
+        return ""
+    return "data:image/png;base64," + base64.b64encode(png.tobytes()).decode("ascii")
+
+
+def _burst_box_for(region_id: str):
+    for r in tp_chart.BURST_REGIONS:
+        if r["id"] == region_id:
+            return r["ideal_box"]
+    return None
+
+
+def _freq_burst_metrics(c: Dict[str, Any], burst_id: str, xc_id: str):
+    """Pull luma modulation % + chroma leak rms for a single burst."""
+    fr_regions = ((c.get("frequency_response") or {}).get("regions") or {})
+    art_regions = ((c.get("artifacts") or {}).get("regions") or {})
+    lu = fr_regions.get(burst_id) or {}
+    xc = art_regions.get(xc_id) or {}
+    return {
+        "luma_modulation_pct": lu.get("modulation_pct"),
+        "luma_modulation_db":  lu.get("modulation_db"),
+        "chroma_leak_rms":     xc.get("chroma_rms"),
+    }
+
+
+def _freq_verdict(luma_pct, chroma_rms) -> str:
+    parts = []
+    if luma_pct is None:
+        parts.append("luma not measured")
+    elif luma_pct >= 60:
+        parts.append("strong luma")
+    elif luma_pct >= 30:
+        parts.append("moderate luma")
+    elif luma_pct >= 10:
+        parts.append("weak luma")
+    else:
+        parts.append("no luma modulation")
+    if chroma_rms is None:
+        parts.append("chroma leak unknown")
+    elif chroma_rms < 10:
+        parts.append("clean Y/C")
+    elif chroma_rms < 100:
+        parts.append(f"some chroma leak ({chroma_rms:.0f} rms)")
+    else:
+        parts.append(f"heavy cross-color ({chroma_rms:.0f} rms)")
+    return "; ".join(parts)
+
+
+def _chroma_class(rms) -> str:
+    # Empirically calibrated on real captures: cross-color from composite
+    # NTSC decoding routinely hits 300-500 rms at 300/400 TVL, while
+    # clean SDI sits below 5. Threshold midpoint at 100 separates the
+    # two regimes cleanly.
+    if rms is None:
+        return ""
+    if rms < 10:
+        return "delta-good"
+    if rms < 100:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def _luma_class(pct) -> str:
+    if pct is None:
+        return ""
+    if pct >= 50:
+        return "delta-good"
+    if pct >= 20:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def render_frequency_response_overview(captures: List[Dict[str, Any]]) -> str:
+    head = (
+        "<tr>"
+        + _sortable_th("Capture",
+                       "Capture file name.", kind="text")
+        + _sortable_th("3.58 MHz luma %",
+                       "Luma modulation at the NTSC subcarrier burst. "
+                       "Higher = decoder passes high-frequency luma. "
+                       "Typical good values: 40-70 %.")
+        + _sortable_th("Max chroma leak",
+                       "Largest chroma RMS across the four row-2 "
+                       "luma-only bursts. 0 = perfect Y/C separation; "
+                       ">20 = noticeable cross-color contamination.")
+        + _sortable_th("Worst burst",
+                       "Burst region with the largest chroma leak.",
+                       kind="text")
+        + _sortable_th("300 TVL luma %",
+                       "Luma modulation at the 300 TV-line diagonal burst.")
+        + _sortable_th("400 TVL luma %",
+                       "Luma modulation at the 400 TV-line diagonal burst.")
+        + "</tr>"
+    )
+    rows = []
+    for c in captures:
+        name = _basename(c["_meta"]["capture"])
+        per_burst = {b["id"]: _freq_burst_metrics(c, b["id"], b["xc_id"])
+                     for b in FREQ_BURST_REGIONS}
+        sc358 = per_burst["BURST_3p58"]["luma_modulation_pct"]
+        sc300 = per_burst["BURST_300TVL_DIAG"]["luma_modulation_pct"]
+        sc400 = per_burst["BURST_400TVL_DIAG"]["luma_modulation_pct"]
+        leaks = [(bid, m["chroma_leak_rms"]) for bid, m in per_burst.items()
+                 if m["chroma_leak_rms"] is not None]
+        if leaks:
+            worst_id, max_leak = max(leaks, key=lambda r: r[1])
+            worst_label = next(b["label"] for b in FREQ_BURST_REGIONS
+                               if b["id"] == worst_id)
+        else:
+            max_leak = None
+            worst_label = "—"
+        cells = [
+            _td_name(name),
+            _td_num(sc358,    "{:.1f}", cls=_luma_class(sc358)),
+            _td_num(max_leak, "{:.1f}", cls=_chroma_class(max_leak)),
+            f'<td class="name" data-v="{_h.escape(worst_label)}">'
+            f'{_h.escape(worst_label)}</td>',
+            _td_num(sc300, "{:.1f}", cls=_luma_class(sc300)),
+            _td_num(sc400, "{:.1f}", cls=_luma_class(sc400)),
+        ]
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"""
+<section class="overview">
+  <h2>Frequency Response Overview</h2>
+  <p class="legend">
+    Headline numbers for the row-2 frequency bursts. Higher luma % = the
+    decoder passes high-frequency luma; lower chroma leak = better Y/C
+    separation (a luma-only burst should produce zero chroma).
+  </p>
+  <table class="overview-table">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
+def _render_freq_burst_panel(c: Dict[str, Any]) -> str:
+    cap_name = _basename(c["_meta"]["capture"])
+    rows_html = []
+    for b in FREQ_BURST_REGIONS:
+        m = _freq_burst_metrics(c, b["id"], b["xc_id"])
+        lu_pct = m["luma_modulation_pct"]
+        lu_db  = m["luma_modulation_db"]
+        xc_rms = m["chroma_leak_rms"]
+        verdict = _freq_verdict(lu_pct, xc_rms)
+        lu_cell = ("—" if lu_pct is None
+                   else f"{lu_pct:.1f}%"
+                        + (f" ({lu_db:+.1f} dB)" if lu_db is not None
+                           and lu_db != float("-inf") else ""))
+        rows_html.append(
+            f"<tr>"
+            f"<td class='name'>{_h.escape(b['label'])}</td>"
+            f"<td class='delta {_luma_class(lu_pct)}'>{lu_cell}</td>"
+            f"<td class='delta {_chroma_class(xc_rms)}'>"
+            f"{'—' if xc_rms is None else f'{xc_rms:.1f}'}</td>"
+            f"<td class='verdict'>{_h.escape(verdict)}</td>"
+            f"</tr>"
+        )
+    return (
+        f"<div class='color-panel'>"
+        f"<h3>{_h.escape(cap_name)}</h3>"
+        f"<table class='color-table'>"
+        f"<tr>{_th('Burst', 'Frequency-response test region in row 2 of the chart.')}"
+        f"{_th('Luma modulation', 'Peak luma modulation as a fraction of the chart full-contrast swing (black→white = 100%).')}"
+        f"{_th('Chroma leak (rms)', 'RMS chroma deviation inside this luma-only burst. Ideally 0 — any nonzero value means the decoder is misclassifying high-frequency luma as chroma (cross-color).')}"
+        f"{_th('Verdict', 'Plain-language summary.')}"
+        f"</tr>"
+        + "".join(rows_html) +
+        f"</table></div>"
+    )
+
+
+def render_frequency_response_section(captures: List[Dict[str, Any]]) -> str:
+    if not any(c.get("frequency_response") or c.get("artifacts")
+               for c in captures):
+        return ""
+    # Synthetic reference thumbnails — what a clean decoder should produce.
+    try:
+        bgr = _synth_frame_bgr()
+        ref_imgs = []
+        for b in FREQ_BURST_REGIONS:
+            box = _burst_box_for(b["id"])
+            if box is None:
+                continue
+            data_url = _bgr_crop_to_png_data_url(bgr, box, upscale=4)
+            ref_imgs.append(
+                f"<figure class='burst-ref'>"
+                f"<img src='{data_url}' alt='{_h.escape(b['label'])}'/>"
+                f"<figcaption>{_h.escape(b['label'])}</figcaption>"
+                f"</figure>"
+            )
+        ref_block = ("<div class='burst-ref-row'>" + "".join(ref_imgs)
+                     + "</div>")
+    except Exception:
+        ref_block = ""
+
+    intro = """
+<p class="legend">
+  <b>What is a TVL burst?</b> "TVL" = TV-lines, the classic broadcast
+  metric for horizontal resolution. 300 TVL means the chart can resolve
+  300 distinct vertical bars across the picture height (≈ 240 bars
+  across the active width on a 4:3 raster); 400 TVL is a denser pattern
+  past the design bandwidth of most analog composite decoders. The
+  diagonal version of each burst tilts the pattern 45° to test
+  off-axis resolution, where simpler line-comb decoders typically
+  lose information.
+</p>
+<p class="legend">
+  <b>What should we see?</b> Every row-2 burst is drawn as pure
+  <i>luma</i> (black-and-white stripes). On a clean signal path you
+  should see strong luma modulation and <b>zero chroma</b>. Any chroma
+  rms above noise floor means the decoder is mistaking high-frequency
+  luma for chroma — the textbook
+  <a href="https://en.wikipedia.org/wiki/Chrominance"
+     style="color:#9ec1ff">cross-color (Y/C separation) artifact</a>.
+</p>
+<p class="legend">
+  3.58 MHz and 4.43 MHz are particularly diagnostic because they sit
+  exactly on the NTSC and PAL color subcarriers, where most decoder
+  notch filters reject them cleanly. The 300 TVL (≈ 3.95 MHz) and
+  400 TVL (≈ 5.27 MHz) diagonals sit <i>outside</i> the notch — naive
+  decoders happily pass them through and re-interpret them as chroma,
+  producing dramatic cross-color (hundreds of rms units in real
+  composite-NTSC processing chains). High chroma rms on these bursts
+  isn't a measurement bug — it's the actual artifact the chart was
+  designed to expose.
+</p>
+"""
+    panels = [_render_freq_burst_panel(c) for c in captures]
+    return f"""
+<section class="freq-burst-panels">
+  <h2>Frequency Response — row-2 bursts</h2>
+  {intro}
+  <h4 style="margin-bottom:4px">Reference (synthesized clean signal)</h4>
+  {ref_block}
+  {''.join(panels)}
+</section>
+"""
+
+
 def render_gray_panels(captures: List[Dict[str, Any]]) -> str:
     panels = [_render_gray_panel(c) for c in captures]
     return f"""
@@ -973,6 +1388,11 @@ table.overview-table tbody tr:nth-child(odd) { background: rgba(255,255,255,0.01
 .swatch-inline { display: inline-block; width: 22px; height: 22px; vertical-align: middle; }
 .swatch-inline.ideal    { border: 2px dashed #c5d1e0; box-sizing: border-box; }
 .swatch-inline.measured { border: 2px solid  #f0b450; box-sizing: border-box; }
+.burst-ref-row { display: flex; gap: 12px; flex-wrap: wrap; margin: 6px 0 12px 0; }
+.burst-ref { margin: 0; text-align: center; }
+.burst-ref img { display: block; border: 1px solid #2a2e36; image-rendering: pixelated;
+    background: #14161a; }
+.burst-ref figcaption { font-size: 11px; color: #b8c0cc; margin-top: 4px; }
 """
 
 
@@ -1691,16 +2111,18 @@ def render_decoder_class(captures: List[Dict[str, Any]]) -> str:
 def render_page(captures: List[Dict[str, Any]]) -> str:
     title = f"SW2 Comparison — {len(captures)} captures"
     overviews = (
-        render_geometry_overview(captures)
+        render_overall_summary(captures)
+        + render_geometry_overview(captures)
         + render_tartan_overview(captures)
         + render_grayscale_overview(captures)
+        + render_frequency_response_overview(captures)
     )
     details = (
         render_geometry_section(captures)
         + render_tartan_panels(captures)
         + render_gray_panels(captures)
+        + render_frequency_response_section(captures)
         + render_luma_scale_analysis(captures)
-        + render_frequency_response(captures)
         + render_artifacts(captures)
         + render_radial_wedge(captures)
         + render_decoder_class(captures)
@@ -1712,6 +2134,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_registration_summary(captures)
         + render_tartan_deltas(captures)
         + render_gray_deltas(captures)
+        + render_frequency_response(captures)
         + '</section>'
     )
     return f"""<!doctype html>

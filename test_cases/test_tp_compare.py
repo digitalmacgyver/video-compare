@@ -375,6 +375,60 @@ def test_render_gray_panel_shows_per_step_swatches():
     assert "20% IRE" in html
 
 
+def test_overall_summary_table_lists_each_capture_with_scores():
+    a = _make_capture_json_with_geometry("alpha")
+    b = _make_capture_json_with_geometry("beta")
+    html = tp_compare.render_overall_summary([a, b])
+    assert "Overall Summary" in html
+    # Score column headers
+    assert "Geometry" in html and "Color" in html
+    assert "Grayscale" in html and "Overall" in html
+    # Per-capture row appears
+    assert "alpha.mov" in html and "beta.mov" in html
+    # Sortable
+    assert "data-sort=" in html
+
+
+def test_render_frequency_response_overview_handles_missing_data():
+    a = _make_capture_json_with_geometry("alpha")  # no freq/artifact blocks
+    html = tp_compare.render_frequency_response_overview([a])
+    # Section still emits with em-dashes / muted markers
+    assert "Frequency Response Overview" in html
+
+
+def test_render_frequency_response_section_includes_intro_and_reference():
+    a = _make_capture_json_with_geometry("alpha")
+    a["frequency_response"] = {
+        "regions": {
+            "BURST_3p58":        {"modulation_pct": 55.0, "modulation_db": -5.2},
+            "BURST_4p43":        {"modulation_pct": 38.0, "modulation_db": -8.4},
+            "BURST_300TVL_DIAG": {"modulation_pct": 41.0, "modulation_db": -7.8},
+            "BURST_400TVL_DIAG": {"modulation_pct": 22.0, "modulation_db": -13.2},
+        },
+        "summary": {"luma_response_curve": [], "minus_3db_freq_MHz": None,
+                    "minus_6db_freq_MHz": None},
+    }
+    a["artifacts"] = {
+        "regions": {
+            "XC_BURST_3p58":  {"chroma_rms": 3.0},
+            "XC_BURST_4p43":  {"chroma_rms": 14.0},
+            "XC_BURST_300TVL": {"chroma_rms": 6.0},
+            "XC_BURST_400TVL": {"chroma_rms": 18.0},
+        },
+        "summary": {}, "thresholds": {},
+    }
+    html = tp_compare.render_frequency_response_section([a])
+    # Section heading and intro keywords
+    assert "Frequency Response — row-2 bursts" in html
+    assert "TVL" in html and "cross-color" in html
+    # Reference (synth) thumbnails — at least the first burst label shows up
+    assert "3.58 MHz vertical" in html
+    # Numeric readings appear in the panel
+    assert "55.0" in html and "14.0" in html
+    # Verdict phrasing
+    assert "clean Y/C" in html or "chroma leak" in html
+
+
 def test_render_page_places_registration_summary_in_appendix():
     a = _make_capture_json_with_geometry("alpha")
     b = _make_capture_json_with_geometry("beta")
@@ -403,6 +457,9 @@ TESTS_NO_TMPDIR = [
     test_grayscale_overview_lists_black_floor_and_white_ceiling,
     test_render_tartan_panel_shows_per_color_swatches_and_verdict,
     test_render_gray_panel_shows_per_step_swatches,
+    test_overall_summary_table_lists_each_capture_with_scores,
+    test_render_frequency_response_overview_handles_missing_data,
+    test_render_frequency_response_section_includes_intro_and_reference,
     test_render_page_places_registration_summary_in_appendix,
 ]
 TESTS_TMPDIR = [test_compare_cli_writes_html]

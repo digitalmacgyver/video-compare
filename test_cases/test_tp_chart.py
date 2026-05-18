@@ -240,6 +240,7 @@ def test_burst_regions_catalog():
 def test_artifact_regions_catalog():
     ids = [r["id"] for r in tp_chart.ARTIFACT_REGIONS]
     expected = {"HD_RED_TOP", "HD_MAGENTA_TOP", "DC_TARTAN_BELOW",
+                "XC_BURST_3p58", "XC_BURST_4p43",
                 "XC_BURST_300TVL", "XC_BURST_400TVL", "XC_WEDGE_4MHz",
                 "XC_WEDGE_5MHz", "XL_RED_INTERIOR", "XL_MAGENTA_INTERIOR",
                 "ZP_CHROMA_LEAK", "XC_RADIAL_WEDGE", "WEDGE_HV_SYMMETRY"}
