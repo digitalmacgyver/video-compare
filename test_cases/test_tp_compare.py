@@ -305,6 +305,90 @@ def test_render_geometry_section_handles_missing_block():
     assert "older JSON" in html or "no geometry" in html
 
 
+def test_geometry_overview_table_contains_all_captures_and_is_sortable():
+    a = _make_capture_json_with_geometry("alpha")
+    b = _make_capture_json_with_geometry("beta")
+    html = tp_compare.render_geometry_overview([a, b])
+    assert "Geometry Overview" in html
+    assert "overview-table" in html
+    # Each capture's basename appears in a row
+    assert "alpha.mov" in html
+    assert "beta.mov" in html
+    # Sortable headers carry the data-sort attribute the JS reads
+    assert 'data-sort="num"' in html
+    assert 'data-sort="text"' in html
+
+
+def test_tartan_overview_includes_mean_de_and_worst_color():
+    a = _make_capture_json_with_geometry("alpha")
+    html = tp_compare.render_tartan_overview([a])
+    assert "Color (Tartan) Overview" in html
+    assert "Mean ΔE" in html
+    assert "Worst color" in html
+    # The single tartan patch in the fixture is YEL → it should be reported as worst
+    assert "YEL" in html
+
+
+def test_grayscale_overview_lists_black_floor_and_white_ceiling():
+    a = _make_capture_json_with_geometry("alpha")
+    # The fixture only has G1; build a richer one with G1–G4 so the
+    # overview can compute the white-ceiling delta.
+    a["grays"] = [
+        {"id": "G1", "name": "gray_20", "ideal_y10": 239.2,
+         "measured_y10": 248.0, "delta_y10": 8.8,
+         "u10": 512, "v10": 512, "patch_size_px": [3, 3]},
+        {"id": "G2", "name": "gray_40", "ideal_y10": 414.4,
+         "measured_y10": 413.0, "delta_y10": -1.4,
+         "u10": 512, "v10": 512, "patch_size_px": [3, 3]},
+        {"id": "G3", "name": "gray_60", "ideal_y10": 589.6,
+         "measured_y10": 591.0, "delta_y10": 1.4,
+         "u10": 512, "v10": 512, "patch_size_px": [3, 3]},
+        {"id": "G4", "name": "gray_80", "ideal_y10": 764.8,
+         "measured_y10": 756.0, "delta_y10": -8.8,
+         "u10": 514, "v10": 510, "patch_size_px": [3, 3]},
+    ]
+    html = tp_compare.render_grayscale_overview([a])
+    assert "Grayscale Overview" in html
+    assert "Black floor" in html and "White ceiling" in html
+    # The G1 delta (+8.8) and G4 delta (-8.8) should both appear
+    assert "+8.8" in html
+    assert "-8.8" in html
+
+
+def test_render_tartan_panel_shows_per_color_swatches_and_verdict():
+    a = _make_capture_json_with_geometry("alpha")
+    html = tp_compare.render_tartan_panels([a])
+    assert "alpha.mov" in html
+    # Per-color row pieces
+    assert "swatch-inline" in html
+    assert "ΔE" in html
+    # Plain-language verdict appears
+    assert "match" in html or "close" in html or "off" in html
+
+
+def test_render_gray_panel_shows_per_step_swatches():
+    a = _make_capture_json_with_geometry("alpha")
+    html = tp_compare.render_gray_panels([a])
+    assert "alpha.mov" in html
+    assert "swatch-inline" in html
+    # The fixture has G1; its label should appear
+    assert "20% IRE" in html
+
+
+def test_render_page_places_registration_summary_in_appendix():
+    a = _make_capture_json_with_geometry("alpha")
+    b = _make_capture_json_with_geometry("beta")
+    html = tp_compare.render_page([a, b])
+    # Appendix container exists and wraps the registration summary
+    app_idx = html.index("Technical Appendix")
+    reg_idx = html.index("Registration Summary")
+    geo_overview_idx = html.index("Geometry Overview")
+    # Overviews come before the appendix
+    assert geo_overview_idx < app_idx
+    # Registration Summary is inside the appendix region
+    assert app_idx < reg_idx
+
+
 TESTS_NO_TMPDIR = [
     test_render_registration_summary_contains_per_capture_data,
     test_render_tartan_deltas_contains_swatches_and_deltas,
@@ -314,6 +398,12 @@ TESTS_NO_TMPDIR = [
     test_render_geometry_section_shows_clip_when_apex_invisible,
     test_render_page_includes_geometry_section,
     test_render_geometry_section_handles_missing_block,
+    test_geometry_overview_table_contains_all_captures_and_is_sortable,
+    test_tartan_overview_includes_mean_de_and_worst_color,
+    test_grayscale_overview_lists_black_floor_and_white_ceiling,
+    test_render_tartan_panel_shows_per_color_swatches_and_verdict,
+    test_render_gray_panel_shows_per_step_swatches,
+    test_render_page_places_registration_summary_in_appendix,
 ]
 TESTS_TMPDIR = [test_compare_cli_writes_html]
 

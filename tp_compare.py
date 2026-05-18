@@ -84,6 +84,522 @@ def _render_fiducial_crops(capture: Dict[str, Any]) -> str:
     )
 
 
+# ---------------------------------------------------------------------
+# Top-of-report overview tables (sortable). Each row is one capture; the
+# columns are the small handful of headline metrics a reader is most
+# likely to want to compare across processors.
+# ---------------------------------------------------------------------
+
+def _sortable_th(label: str, tip: str, kind: str = "num") -> str:
+    tip_esc = _h.escape(tip)
+    return (
+        f'<th class="tip sortable" data-tip="{tip_esc}" data-sort="{kind}" '
+        f'aria-label="{tip_esc}">{label}</th>'
+    )
+
+
+_OVERVIEW_SORT_JS = """
+<script>
+(function () {
+  document.querySelectorAll('table.overview-table').forEach(function (tbl) {
+    var ths = tbl.querySelectorAll('th.sortable');
+    ths.forEach(function (th, idx) {
+      th.addEventListener('click', function () {
+        var asc = !th.classList.contains('sort-asc');
+        ths.forEach(function (other) {
+          other.classList.remove('sort-asc');
+          other.classList.remove('sort-desc');
+        });
+        th.classList.toggle('sort-asc',  asc);
+        th.classList.toggle('sort-desc', !asc);
+        var kind = th.getAttribute('data-sort') || 'num';
+        var rows = Array.prototype.slice.call(
+          tbl.querySelectorAll('tbody tr'));
+        rows.sort(function (a, b) {
+          var av = a.children[idx].getAttribute('data-v');
+          var bv = b.children[idx].getAttribute('data-v');
+          if (kind === 'num') {
+            av = parseFloat(av); bv = parseFloat(bv);
+            if (isNaN(av)) av = -Infinity;
+            if (isNaN(bv)) bv = -Infinity;
+            return asc ? av - bv : bv - av;
+          }
+          av = (av || '').toLowerCase();
+          bv = (bv || '').toLowerCase();
+          return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+        });
+        var tbody = tbl.querySelector('tbody');
+        rows.forEach(function (r) { tbody.appendChild(r); });
+      });
+    });
+  });
+})();
+</script>
+"""
+
+
+def _td_num(value, fmt: str = "{:.2f}", cls: str = "") -> str:
+    if value is None or (isinstance(value, float)
+                         and (value != value)):  # NaN
+        return (f'<td class="numeric {cls}" data-v="">'
+                f'<span class="muted">&mdash;</span></td>')
+    return (f'<td class="numeric {cls}" data-v="{value}">'
+            f'{fmt.format(value)}</td>')
+
+
+def _td_name(name: str) -> str:
+    safe = _h.escape(name)
+    return f'<td class="name" data-v="{safe}">{safe}</td>'
+
+
+def _sum_geom_metrics(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """Reduce a per-capture geometry.derived.summary to the headline
+    numbers shown in the overview table."""
+    out = {
+        "max_arrow_delta_px": None,
+        "center_offset_mag_px": None,
+        "h_scale_pct":  None,
+        "v_scale_pct":  None,
+        "keystone_max_px": None,
+        "displayed_circularity": None,
+    }
+    if not summary:
+        return out
+    sp = summary.get("arrow_spacings_px") or {}
+    if sp:
+        out["max_arrow_delta_px"] = max(abs(sp[k]["delta"]) for k in sp)
+    off = summary.get("picture_center_offset_px") or {}
+    if "dx" in off and "dy" in off:
+        out["center_offset_mag_px"] = (off["dx"] ** 2 + off["dy"] ** 2) ** 0.5
+    sc = summary.get("picture_scale_pct") or {}
+    out["h_scale_pct"] = sc.get("horizontal")
+    out["v_scale_pct"] = sc.get("vertical")
+    ks = summary.get("keystone_px") or {}
+    if ks:
+        out["keystone_max_px"] = max(
+            abs(ks.get("horizontal_top_minus_bottom", 0.0)),
+            abs(ks.get("vertical_left_minus_right",   0.0)),
+        )
+    circ = summary.get("circle") or {}
+    out["displayed_circularity"] = circ.get("displayed_circularity")
+    return out
+
+
+def render_geometry_overview(captures: List[Dict[str, Any]]) -> str:
+    head = (
+        "<tr>"
+        + _sortable_th("Capture",
+                       "Capture file name.", kind="text")
+        + _sortable_th("Max arrow Δ (px)",
+                       "Largest absolute deviation of any of the four "
+                       "arrowhead spacings (top/bottom/left/right) vs the "
+                       "chart spec. Lower = closer to a faithful raster.")
+        + _sortable_th("Center offset (px)",
+                       "Euclidean distance from the four-apex midpoint to "
+                       "the ideal raster center.")
+        + _sortable_th("H scale %",
+                       "Mean horizontal arrowhead spacing / ideal × 100. "
+                       "100% = correct.")
+        + _sortable_th("V scale %",
+                       "Mean vertical arrowhead spacing / ideal × 100. "
+                       "100% = correct.")
+        + _sortable_th("Keystone (px)",
+                       "Max of |top−bottom width| and |left−right height|. "
+                       "0 = no keystone.")
+        + _sortable_th("Circle disp.",
+                       "Displayed circularity (PAR-aware). 1.00 = round in "
+                       "display; >1 = horizontally stretched; <1 = "
+                       "vertically stretched.")
+        + "</tr>"
+    )
+    rows = []
+    for c in captures:
+        name = _basename(c["_meta"]["capture"])
+        g = c.get("geometry") or {}
+        summary = (g.get("derived") or {}).get("summary")
+        m = _sum_geom_metrics(summary)
+        cells = [
+            _td_name(name),
+            _td_num(m["max_arrow_delta_px"], "{:.1f}",
+                    cls=_delta_class_offset(m["max_arrow_delta_px"] or 0,
+                                            2, 5)),
+            _td_num(m["center_offset_mag_px"], "{:.2f}",
+                    cls=_delta_class_offset(m["center_offset_mag_px"] or 0,
+                                            2, 5)),
+            _td_num(m["h_scale_pct"], "{:.2f}",
+                    cls=_delta_class_offset(((m["h_scale_pct"] or 100.0)
+                                             - 100.0), 1, 3)),
+            _td_num(m["v_scale_pct"], "{:.2f}",
+                    cls=_delta_class_offset(((m["v_scale_pct"] or 100.0)
+                                             - 100.0), 1, 3)),
+            _td_num(m["keystone_max_px"], "{:.1f}",
+                    cls=_delta_class_offset(m["keystone_max_px"] or 0,
+                                            2, 5)),
+            _td_num(m["displayed_circularity"], "{:.3f}",
+                    cls=_delta_class_offset(((m["displayed_circularity"]
+                                              or 1.0) - 1.0) * 100,
+                                            2, 5)),
+        ]
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"""
+<section class="overview">
+  <h2>Geometry Overview</h2>
+  <p class="legend">
+    Click any column header to sort. Color-coded against the same
+    thresholds the per-source panels below use.
+  </p>
+  <table class="overview-table">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
+def _color_delta_e(p: Dict[str, Any]) -> float:
+    dy, du, dv = p["delta_yuv10"]
+    return float((dy * dy + du * du + dv * dv) ** 0.5)
+
+
+def _color_class(delta_e: float) -> str:
+    if delta_e < 10:
+        return "delta-good"
+    if delta_e < 30:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def _gray_chroma_cast(g: Dict[str, Any]) -> float:
+    """Magnitude of chroma offset for a gray step (0 = neutral)."""
+    du = (g.get("u10", 512) - 512)
+    dv = (g.get("v10", 512) - 512)
+    return float((du * du + dv * dv) ** 0.5)
+
+
+def render_tartan_overview(captures: List[Dict[str, Any]]) -> str:
+    head = (
+        "<tr>"
+        + _sortable_th("Capture",
+                       "Capture file name.", kind="text")
+        + _sortable_th("Mean ΔE",
+                       "Average Euclidean YUV10 distance from chart spec "
+                       "across all 8 tartan colors. Lower = better.")
+        + _sortable_th("Max ΔE",
+                       "Largest YUV10 distance from spec across the 8 "
+                       "colors.")
+        + _sortable_th("Worst color",
+                       "Tartan color with the largest YUV10 distance.",
+                       kind="text")
+        + _sortable_th("Mean sat %",
+                       "Mean of sat_pct_vs_ideal across the 8 colors. "
+                       "100% = correct saturation, <100% = desaturated, "
+                       ">100% = oversaturated.")
+        + "</tr>"
+    )
+    rows = []
+    for c in captures:
+        name = _basename(c["_meta"]["capture"])
+        patches = c.get("tartan") or []
+        if not patches:
+            rows.append(f"<tr>{_td_name(name)}"
+                        + _td_num(None) * 3
+                        + '<td class="muted" data-v="">—</td>'
+                        + _td_num(None) + "</tr>")
+            continue
+        des = [(p["id"], _color_delta_e(p)) for p in patches]
+        mean_de = sum(d for _, d in des) / len(des)
+        worst_id, max_de = max(des, key=lambda r: r[1])
+        sats = [p.get("sat_pct_vs_ideal", 100.0) for p in patches]
+        mean_sat = sum(sats) / len(sats)
+        cells = [
+            _td_name(name),
+            _td_num(mean_de, "{:.1f}", cls=_color_class(mean_de)),
+            _td_num(max_de,  "{:.1f}", cls=_color_class(max_de)),
+            f'<td class="name" data-v="{_h.escape(worst_id)}">'
+            f'{_h.escape(worst_id)}</td>',
+            _td_num(mean_sat, "{:.1f}",
+                    cls=_delta_class_offset(mean_sat - 100.0, 5, 15)),
+        ]
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"""
+<section class="overview">
+  <h2>Color (Tartan) Overview</h2>
+  <p class="legend">
+    Per-capture summary of the 8 SMPTE 75% tartan patches. ΔE here is
+    a plain Euclidean YUV10 distance — useful for ranking but not a
+    perceptually-uniform color score.
+  </p>
+  <table class="overview-table">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
+def render_grayscale_overview(captures: List[Dict[str, Any]]) -> str:
+    head = (
+        "<tr>"
+        + _sortable_th("Capture",
+                       "Capture file name.", kind="text")
+        + _sortable_th("Mean |ΔY|",
+                       "Mean absolute Y10 deviation across the 4 gray "
+                       "steps (20/40/60/80 % IRE). Lower = better.")
+        + _sortable_th("Black floor ΔY",
+                       "Signed Y10 deviation at the 20 % IRE step "
+                       "(G1). Positive = lifted blacks, negative = "
+                       "crushed blacks.")
+        + _sortable_th("White ceiling ΔY",
+                       "Signed Y10 deviation at the 80 % IRE step "
+                       "(G4). Positive = whites brighter than spec; "
+                       "negative = rolled-off whites.")
+        + _sortable_th("Max chroma cast",
+                       "Largest U/V offset from neutral (512) across "
+                       "the 4 gray steps. 0 = perfectly neutral grays.")
+        + "</tr>"
+    )
+    rows = []
+    for c in captures:
+        name = _basename(c["_meta"]["capture"])
+        grays = c.get("grays") or []
+        if len(grays) < 4:
+            rows.append(f"<tr>{_td_name(name)}"
+                        + _td_num(None) * 4 + "</tr>")
+            continue
+        by_id = {g["id"]: g for g in grays}
+        steps_in_order = ["G1", "G2", "G3", "G4"]
+        deltas = [by_id[s]["delta_y10"] for s in steps_in_order
+                  if s in by_id]
+        mean_abs = sum(abs(d) for d in deltas) / len(deltas)
+        black_floor = by_id["G1"]["delta_y10"]
+        white_ceil  = by_id["G4"]["delta_y10"]
+        max_cast = max(_gray_chroma_cast(by_id[s]) for s in steps_in_order
+                       if s in by_id)
+        cells = [
+            _td_name(name),
+            _td_num(mean_abs, "{:.1f}",
+                    cls=_delta_class_offset(mean_abs, 5, 15)),
+            _td_num(black_floor, "{:+.1f}",
+                    cls=_delta_class_offset(black_floor, 5, 15)),
+            _td_num(white_ceil, "{:+.1f}",
+                    cls=_delta_class_offset(white_ceil, 5, 15)),
+            _td_num(max_cast, "{:.1f}",
+                    cls=_delta_class_offset(max_cast, 5, 15)),
+        ]
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"""
+<section class="overview">
+  <h2>Grayscale Overview</h2>
+  <p class="legend">
+    Per-capture summary of the 4-step grayscale (20 / 40 / 60 / 80 % IRE).
+    All deltas are in 10-bit luma codes — 10 codes ≈ 1 % luma. The
+    chroma-cast column flags non-neutral grays (a comb-decoder smell).
+  </p>
+  <table class="overview-table">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
+# ---------------------------------------------------------------------
+# Per-video layperson panels for tartan + grayscale (matched in style to
+# the geometry panel).
+# ---------------------------------------------------------------------
+
+_TARTAN_COLOR_LABELS = {
+    "YEL":  "yellow (top row)",
+    "CYN":  "cyan (top row)",
+    "BLU":  "blue (top row)",
+    "RED":  "red (top row)",
+    "MAG":  "magenta (bottom row)",
+    "GRN":  "green (bottom row)",
+    "RED2": "red (bottom row)",
+    "CYN2": "cyan (bottom row)",
+}
+
+
+def _swatch_inline(rgb_tuple, role: str) -> str:
+    r, g, b = rgb_tuple
+    return (f"<span class='swatch-inline {role}' "
+            f"style='background-color: rgb({r},{g},{b});' "
+            f"title='RGB ({r},{g},{b})'></span>")
+
+
+def _tartan_verdict(delta_e: float, sat_pct: float) -> str:
+    parts = []
+    if delta_e < 10:
+        parts.append("match")
+    elif delta_e < 30:
+        parts.append("close")
+    else:
+        parts.append("off")
+    if abs(sat_pct - 100.0) >= 5:
+        if sat_pct < 100:
+            parts.append(f"{100.0 - sat_pct:.0f}% under-saturated")
+        else:
+            parts.append(f"{sat_pct - 100.0:.0f}% over-saturated")
+    return ", ".join(parts)
+
+
+def _render_tartan_panel(c: Dict[str, Any]) -> str:
+    cap_name = _basename(c["_meta"]["capture"])
+    patches = c.get("tartan") or []
+    if not patches:
+        return (f"<div class='color-panel'><h3>{_h.escape(cap_name)}</h3>"
+                f"<p class='muted'>no tartan measurements</p></div>")
+    region_ids = [r["id"] for r in tp_chart.TARTAN_REGIONS]
+    by_id = {p["id"]: p for p in patches}
+    rows = []
+    for rid in region_ids:
+        p = by_id.get(rid)
+        if p is None:
+            continue
+        ideal_rgb = tp_chart.yuv10_to_rgb8(*p["ideal_yuv10"])
+        meas_rgb  = tp_chart.yuv10_to_rgb8(*p["measured_yuv10"])
+        dy, du, dv = p["delta_yuv10"]
+        de = _color_delta_e(p)
+        sat = p.get("sat_pct_vs_ideal", 100.0)
+        verdict = _tartan_verdict(de, sat)
+        rows.append(
+            f"<tr>"
+            f"<td class='name'>{rid}</td>"
+            f"<td class='muted small'>{_TARTAN_COLOR_LABELS.get(rid, rid)}</td>"
+            f"<td class='swatch-cell'>{_swatch_inline(ideal_rgb, 'ideal')}</td>"
+            f"<td class='swatch-cell'>{_swatch_inline(meas_rgb, 'measured')}</td>"
+            f"<td class='delta'>ΔY {dy:+.1f}</td>"
+            f"<td class='delta'>ΔU {du:+.1f}</td>"
+            f"<td class='delta'>ΔV {dv:+.1f}</td>"
+            f"<td class='delta {_color_class(de)}'>ΔE {de:.1f}</td>"
+            f"<td class='delta {_delta_class_offset(sat - 100.0, 5, 15)}'>"
+            f"{sat:.1f}%</td>"
+            f"<td class='verdict'>{_h.escape(verdict)}</td>"
+            f"</tr>"
+        )
+    return (
+        f"<div class='color-panel'>"
+        f"<h3>{_h.escape(cap_name)}</h3>"
+        f"<table class='color-table'>"
+        f"<tr>{_th('ID', 'Region code.')}"
+        f"{_th('Color', 'Plain-language label for the patch.')}"
+        f"{_th('Ref', 'Ideal swatch synthesized from the chart-spec YUV.')}"
+        f"{_th('Cap', 'Measured swatch sampled from the capture.')}"
+        f"{_th('ΔY', 'Luma code delta, capture − ideal.')}"
+        f"{_th('ΔU', 'Cb code delta, capture − ideal.')}"
+        f"{_th('ΔV', 'Cr code delta, capture − ideal.')}"
+        f"{_th('ΔE', 'Euclidean YUV10 distance.')}"
+        f"{_th('Sat %', 'Saturation as a fraction of the ideal vector length in U/V.')}"
+        f"{_th('Verdict', 'One-line plain-language summary.')}"
+        f"</tr>"
+        + "".join(rows) +
+        f"</table></div>"
+    )
+
+
+def render_tartan_panels(captures: List[Dict[str, Any]]) -> str:
+    panels = [_render_tartan_panel(c) for c in captures]
+    return f"""
+<section class="tartan-panels">
+  <h2>Color (Tartan) — per capture</h2>
+  <p class="legend">
+    Each row is one of the 8 SMPTE 75% colors on the chart. The
+    ref/cap swatches show the ideal next to the sampled color; ΔY/ΔU/ΔV
+    are the underlying 10-bit code deltas; ΔE is a plain Euclidean
+    YUV10 distance you can rank against. The Sat % column flags
+    saturation loss or boost.
+  </p>
+  {''.join(panels)}
+</section>
+"""
+
+
+def _gray_verdict(g: Dict[str, Any]) -> str:
+    dy = g["delta_y10"]
+    cast = _gray_chroma_cast(g)
+    parts = []
+    if abs(dy) < 5:
+        parts.append("on spec")
+    elif dy > 0:
+        parts.append(f"{dy:+.0f} (lifted)")
+    else:
+        parts.append(f"{dy:+.0f} (compressed)")
+    if cast >= 5:
+        parts.append(f"chroma cast {cast:.0f}")
+    return ", ".join(parts)
+
+
+def _render_gray_panel(c: Dict[str, Any]) -> str:
+    cap_name = _basename(c["_meta"]["capture"])
+    grays = c.get("grays") or []
+    if not grays:
+        return (f"<div class='color-panel'><h3>{_h.escape(cap_name)}</h3>"
+                f"<p class='muted'>no grayscale measurements</p></div>")
+    by_id = {g["id"]: g for g in grays}
+    rows = []
+    labels = [("G1", "20% IRE (near black)"),
+              ("G2", "40% IRE"),
+              ("G3", "60% IRE"),
+              ("G4", "80% IRE (near white)")]
+    for rid, label in labels:
+        g = by_id.get(rid)
+        if g is None:
+            continue
+        ideal_rgb = tp_chart.yuv10_to_rgb8(g["ideal_y10"], 512, 512)
+        meas_rgb  = tp_chart.yuv10_to_rgb8(
+            g["measured_y10"], g.get("u10", 512), g.get("v10", 512))
+        dy = g["delta_y10"]
+        du = g.get("u10", 512) - 512
+        dv = g.get("v10", 512) - 512
+        cast = _gray_chroma_cast(g)
+        rows.append(
+            f"<tr>"
+            f"<td class='name'>{rid}</td>"
+            f"<td class='muted small'>{label}</td>"
+            f"<td class='swatch-cell'>{_swatch_inline(ideal_rgb, 'ideal')}</td>"
+            f"<td class='swatch-cell'>{_swatch_inline(meas_rgb, 'measured')}</td>"
+            f"<td class='delta'>{g['ideal_y10']:.1f}</td>"
+            f"<td class='delta'>{g['measured_y10']:.1f}</td>"
+            f"<td class='delta {_delta_class_offset(dy, 5, 15)}'>{dy:+.1f}</td>"
+            f"<td class='delta {_delta_class_offset(cast, 5, 15)}'>"
+            f"ΔU {du:+.0f} ΔV {dv:+.0f}</td>"
+            f"<td class='verdict'>{_h.escape(_gray_verdict(g))}</td>"
+            f"</tr>"
+        )
+    return (
+        f"<div class='color-panel'>"
+        f"<h3>{_h.escape(cap_name)}</h3>"
+        f"<table class='color-table'>"
+        f"<tr>{_th('ID', 'Region code.')}"
+        f"{_th('Step', 'Position on the chart 4-step grayscale.')}"
+        f"{_th('Ref', 'Ideal swatch at the chart-spec gray level.')}"
+        f"{_th('Cap', 'Measured swatch with any chroma cast preserved.')}"
+        f"{_th('Y ideal', 'Chart-spec Y10 code.')}"
+        f"{_th('Y meas.', 'Measured Y10 code.')}"
+        f"{_th('ΔY', 'Capture − ideal, in 10-bit luma codes.')}"
+        f"{_th('Chroma', 'U/V offsets from neutral (512). Non-zero = chroma cast on a notionally-gray patch.')}"
+        f"{_th('Verdict', 'One-line plain-language summary.')}"
+        f"</tr>"
+        + "".join(rows) +
+        f"</table></div>"
+    )
+
+
+def render_gray_panels(captures: List[Dict[str, Any]]) -> str:
+    panels = [_render_gray_panel(c) for c in captures]
+    return f"""
+<section class="gray-panels">
+  <h2>Grayscale — per capture</h2>
+  <p class="legend">
+    The 4 grayscale steps at 20/40/60/80 % IRE. Y is measured against
+    the chart-spec ideal; the chroma column flags any tint on what
+    should be a neutral patch (comb-decoder smell).
+  </p>
+  {''.join(panels)}
+</section>
+"""
+
+
 def render_registration_summary(captures: List[Dict[str, Any]]) -> str:
     rows = []
     for c in captures:
@@ -424,6 +940,39 @@ code { color: #c5d1e0; }
 kbd { background: #2a2e36; padding: 1px 6px; border-radius: 3px; font-family: monospace;
     font-size: 11px; border: 1px solid #3a3e46; }
 ul.legend { font-size: 12px; color: #b8c0cc; line-height: 1.7; margin: 6px 0 12px 18px; }
+.overview { margin: 18px 0; }
+table.overview-table { border-collapse: collapse; margin: 8px 0; }
+table.overview-table th, table.overview-table td { border: 1px solid #2a2e36; padding: 4px 10px;
+    font-size: 12px; }
+table.overview-table th { background: #21252b; color: #fff; cursor: pointer; user-select: none;
+    white-space: nowrap; }
+table.overview-table th.sortable::after { content: " \\2195"; opacity: 0.4; font-size: 10px; }
+table.overview-table th.sort-asc::after  { content: " \\25B2"; opacity: 1; }
+table.overview-table th.sort-desc::after { content: " \\25BC"; opacity: 1; }
+table.overview-table td { font-variant-numeric: tabular-nums; }
+table.overview-table td.numeric { text-align: right; }
+table.overview-table td.name { text-align: left; max-width: 380px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.overview-table tbody tr:nth-child(odd) { background: rgba(255,255,255,0.015); }
+.appendix { margin-top: 32px; padding: 12px 16px; background: #16181d;
+    border: 1px solid #2a2e36; border-radius: 4px; }
+.appendix > h2 { color: #8a929f; font-size: 14px; border-bottom: none; margin: 0 0 10px 0; }
+.appendix section h2 { color: #c5d1e0; font-size: 13px; border-bottom: 1px solid #2a2e36; }
+.appendix section { margin: 12px 0; }
+.color-panel { margin: 12px 0; padding: 8px 12px; background: #1d2026; border: 1px solid #2a2e36; }
+.color-panel h3 { margin: 4px 0 8px 0; font-size: 14px; }
+.color-panel h4 { margin: 8px 0 4px 0; font-size: 12px; color: #c5d1e0; }
+.color-table { border-collapse: collapse; margin: 4px 0; width: 100%; max-width: 920px; }
+.color-table th, .color-table td { border: 1px solid #2a2e36; padding: 4px 8px;
+    font-size: 12px; vertical-align: middle; }
+.color-table th { background: #21252b; color: #fff; white-space: nowrap; }
+.color-table td.name      { font-family: monospace; }
+.color-table td.swatch-cell { width: 32px; text-align: center; }
+.color-table td.delta     { font-variant-numeric: tabular-nums; text-align: right; }
+.color-table td.verdict   { font-size: 11px; }
+.swatch-inline { display: inline-block; width: 22px; height: 22px; vertical-align: middle; }
+.swatch-inline.ideal    { border: 2px dashed #c5d1e0; box-sizing: border-box; }
+.swatch-inline.measured { border: 2px solid  #f0b450; box-sizing: border-box; }
 """
 
 
@@ -1141,17 +1690,29 @@ def render_decoder_class(captures: List[Dict[str, Any]]) -> str:
 
 def render_page(captures: List[Dict[str, Any]]) -> str:
     title = f"SW2 Comparison — {len(captures)} captures"
-    sections = (
-        render_registration_summary(captures)
-        + render_geometry_section(captures)
-        + render_tartan_deltas(captures)
-        + render_gray_deltas(captures)
+    overviews = (
+        render_geometry_overview(captures)
+        + render_tartan_overview(captures)
+        + render_grayscale_overview(captures)
+    )
+    details = (
+        render_geometry_section(captures)
+        + render_tartan_panels(captures)
+        + render_gray_panels(captures)
         + render_luma_scale_analysis(captures)
         + render_frequency_response(captures)
         + render_artifacts(captures)
         + render_radial_wedge(captures)
         + render_decoder_class(captures)
         + render_sample_diagnostics(captures)
+    )
+    appendix = (
+        '<section class="appendix">'
+        '<h2>Technical Appendix</h2>'
+        + render_registration_summary(captures)
+        + render_tartan_deltas(captures)
+        + render_gray_deltas(captures)
+        + '</section>'
     )
     return f"""<!doctype html>
 <html><head>
@@ -1161,7 +1722,10 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
 <style>{_CSS}</style>
 </head><body>
 <h1>{_h.escape(title)}</h1>
-{sections}
+{overviews}
+{details}
+{appendix}
+{_OVERVIEW_SORT_JS}
 </body></html>
 """
 
