@@ -198,13 +198,21 @@ def _draw_boundary_triangles(Y: np.ndarray) -> None:
 
 
 def _draw_black_circle(Y: np.ndarray) -> None:
-    """Render the black circle ring from tp_chart.BLACK_CIRCLE."""
+    """Render the black circle ring as a PAR-elliptical shape (matches
+    real NTSC captures, where a logically-round circle appears in the
+    720x486 raster with horizontal semi-axis = vertical semi-axis ×
+    11/10)."""
     import cv2
     bc = tp_chart.BLACK_CIRCLE
-    cv2.circle(
+    ry = int(bc["expected_radius_px"])
+    rx = int(round(ry * tp_chart.NTSC_PAR_X_OVER_Y))
+    cv2.ellipse(
         Y,
         center=(bc["ideal_cx"], bc["ideal_cy"]),
-        radius=bc["expected_radius_px"],
+        axes=(rx, ry),
+        angle=0.0,
+        startAngle=0.0,
+        endAngle=360.0,
         color=int(tp_chart.BLACK_Y10),
         thickness=bc["ring_thickness_px"],
         lineType=cv2.LINE_AA,

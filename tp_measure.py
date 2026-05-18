@@ -307,6 +307,8 @@ def _build_geometry_block(reg_full):
             "center":      [float(bc["cx"]), float(bc["cy"])],
             "rx":          float(bc["rx"]),
             "ry":          float(bc["ry"]),
+            "rx_horizontal_px": float(bc.get("rx_horizontal_px", 0.0)),
+            "ry_vertical_px":   float(bc.get("ry_vertical_px", 0.0)),
             "rotation_deg": float(bc["rotation_deg"]),
             "fit_rms":     float(bc["fit_rms"]),
             "confidence":  float(bc["confidence"]),
@@ -318,7 +320,8 @@ def _build_geometry_block(reg_full):
                 "picture_offset_from_ideal", "corner_skew_px",
                 "cross_offset_from_ideal",
                 "aperture_symmetry", "aspect_ratio_check",
-                "diameter_vs_picture_height", "circle_fit_rms"):
+                "diameter_vs_picture_height", "circle_fit_rms",
+                "summary"):
         derived_out[key] = derived.get(key)
     if derived.get("arrow_tip_coords"):
         derived_out["arrow_tip_coords"] = {

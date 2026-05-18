@@ -243,14 +243,14 @@ def test_detect_black_circle_identity():
     tcx, tcy = gt["circle"]["center"]
     assert abs(result["cx"] - tcx) < 1.0
     assert abs(result["cy"] - tcy) < 1.0
-    truth_r = gt["circle"]["radius"]
-    # rx/ry tolerance: the PAR-aware detector picks midline pixels closest
-    # to its fitted ellipse target, which can land on the outer edge of a
-    # 3-px ring on the axis where the fit is slightly biased by chart
-    # features remaining in the annulus after grid-line filtering. Center
-    # is still recovered to sub-pixel; axes to within ~3 px on synth.
-    assert abs(result["rx"] - truth_r) < 3.0
-    assert abs(result["ry"] - truth_r) < 3.0
+    # The synth ring is PAR-elliptical (horizontal axis = vertical × 11/10),
+    # matching real NTSC captures. The detector reports rx=min(a,b)/2 and
+    # ry=max(a,b)/2 from cv2.fitEllipse: rx should approximate the smaller
+    # (vertical) axis; ry should approximate the larger (horizontal) axis.
+    truth_ry = gt["circle"]["radius"]
+    truth_rx = truth_ry * tp_chart.NTSC_PAR_X_OVER_Y
+    assert abs(result["rx"] - truth_ry) < 4.0, f"rx={result['rx']:.1f} truth={truth_ry}"
+    assert abs(result["ry"] - truth_rx) < 4.0, f"ry={result['ry']:.1f} truth={truth_rx:.1f}"
     assert result["fit_rms"] < 2.5
 
 
@@ -262,9 +262,10 @@ def test_detect_black_circle_noise_sigma_20():
     tcx, tcy = gt["circle"]["center"]
     err = ((result["cx"] - tcx) ** 2 + (result["cy"] - tcy) ** 2) ** 0.5
     assert err < 2.0
-    truth_r = gt["circle"]["radius"]
-    assert abs(result["rx"] - truth_r) < 4.0
-    assert abs(result["ry"] - truth_r) < 4.0
+    truth_ry = gt["circle"]["radius"]
+    truth_rx = truth_ry * tp_chart.NTSC_PAR_X_OVER_Y
+    assert abs(result["rx"] - truth_ry) < 5.0
+    assert abs(result["ry"] - truth_rx) < 5.0
 
 
 def test_detect_black_circle_recovers_PAR_elliptical_ring():
@@ -310,13 +311,11 @@ def test_detect_geometry_returns_full_block_on_clean_fixture():
     assert abs(box["left"] - 181.0) < 1.5
     # right = mean(TR.x, BR.x) = mean(538, 538) = 538
     assert abs(box["right"] - 538.0) < 1.5
-    # Aspect check near 1.0 on the synthesized chart (round-in-raster).
-    # Real captures land at ~0.909 (NTSC 10:11 PAR), which the detector
-    # now recovers correctly thanks to the PAR-aware elliptical annulus.
-    # Tolerance loosened: the round-fit on synth has small bias from
-    # antialiased ring edges + chart features remaining in the wider
-    # annulus, leaving aspect at ~0.98 instead of exactly 1.0.
-    assert abs(geom["derived"]["aspect_ratio_check"] - 1.0) < 0.05
+    # The synth ring is now rendered PAR-elliptical (matches real NTSC
+    # captures): horizontal axis = vertical × 11/10. So
+    # aspect_ratio_check = min(rx,ry)/max(rx,ry) ≈ 10/11 ≈ 0.909.
+    expected_aspect = 1.0 / tp_chart.NTSC_PAR_X_OVER_Y
+    assert abs(geom["derived"]["aspect_ratio_check"] - expected_aspect) < 0.05
     # Aperture symmetry near 1.0 (cross is symmetric).
     assert abs(geom["derived"]["aperture_symmetry"] - 1.0) < 0.1
 

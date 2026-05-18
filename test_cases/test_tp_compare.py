@@ -215,6 +215,28 @@ def _make_capture_json_with_geometry(tag):
             "aspect_ratio_check": 0.998,
             "diameter_vs_picture_height": 1.012,
             "circle_fit_rms": 0.41,
+            "summary": {
+                "arrow_spacings_px": {
+                    "top":    {"actual": 600.0, "ideal": 357.0, "delta": 243.0},
+                    "bottom": {"actual": 600.0, "ideal": 357.0, "delta": 243.0},
+                    "left":   {"actual": 480.0, "ideal": 483.0, "delta": -3.0},
+                    "right":  {"actual": 480.0, "ideal": 483.0, "delta": -3.0},
+                },
+                "picture_center_offset_px": {"dx": 0.0, "dy": 0.0},
+                "picture_scale_pct": {"horizontal": 100.0, "vertical": 99.4},
+                "keystone_px": {
+                    "horizontal_top_minus_bottom": 0.0,
+                    "vertical_left_minus_right":   0.0,
+                },
+                "circle": {
+                    "horizontal_diameter_px": 532.0,
+                    "vertical_diameter_px":   484.0,
+                    "expected_h_over_v_for_round": 1.1,
+                    "actual_h_over_v":             1.099,
+                    "displayed_circularity":       0.999,
+                    "rotation_deg":                0.0,
+                },
+            },
         },
         "registration_refit": {
             "inlier_count_initial": 11,
@@ -233,11 +255,17 @@ def test_render_geometry_section_includes_picture_box_and_clip_status():
     a = _make_capture_json_with_geometry("alpha")
     html = tp_compare.render_geometry_section([a])
     assert "Geometry" in html
-    # Aperture / aspect panels
-    assert "Aperture" in html or "aperture" in html
-    assert "Aspect" in html or "aspect" in html
-    # Clip status
-    assert "no clip detected" in html or "apex_visible" in html
+    # Arrowhead spacings table heading
+    assert "Arrowhead spacing" in html
+    # Picture displacement summary
+    assert "Center shifted" in html
+    assert "Horizontal scale" in html and "Keystone" in html
+    # Registration cross (aperture symmetry)
+    assert "aperture" in html
+    # PAR-aware circle
+    assert "Circle" in html and "Displayed circularity" in html
+    # Clip status chips
+    assert "no clip detected" in html or "TL: visible" in html
     # Refit benefit shows the inlier counts
     assert "11" in html  # initial
     assert "20" in html  # final

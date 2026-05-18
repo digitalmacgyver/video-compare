@@ -402,8 +402,14 @@ code { color: #c5d1e0; }
 .geometry-panel { margin: 12px 0; padding: 8px 12px; background: #1d2026; border: 1px solid #2a2e36; }
 .geometry-panel h3 { margin: 4px 0 8px 0; font-size: 14px; }
 .geometry-panel h4 { margin: 8px 0 4px 0; font-size: 12px; color: #c5d1e0; }
-.geo-table { border-collapse: collapse; }
-.geo-table th, .geo-table td { border: 1px solid #2a2e36; padding: 3px 6px; font-size: 12px; }
+.geo-table { border-collapse: collapse; margin: 4px 0; }
+.geo-table th, .geo-table td { border: 1px solid #2a2e36; padding: 3px 8px; font-size: 12px; }
+.geo-table td:nth-child(2), .geo-table td:nth-child(4) { text-align: right; font-variant-numeric: tabular-nums; }
+.geo-list { margin: 4px 0 4px 18px; padding: 0; font-size: 12px; line-height: 1.65; color: #c5d1e0; }
+.geo-list li { margin: 2px 0; }
+.clip-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0; }
+.clip-chip { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 12px;
+    font-family: monospace; border: 1px solid #2a2e36; }
 .diag-panel { margin: 16px 0; padding: 8px; background: #1d2026; border: 1px solid #2a2e36; }
 .diag-panel h3 { margin: 4px 0 8px 0; font-size: 14px; }
 .diag-zoom-readout { font-size: 11px; color: #8a929f; font-weight: 400; margin-left: 6px; }
@@ -514,135 +520,227 @@ def _delta_class_offset(value, green_lt, yellow_lt):
     return "delta-bad"
 
 
-def render_geometry_section(captures: List[Dict[str, Any]]) -> str:
-    panels = []
-    for c in captures:
-        cap_name = _basename(c["_meta"]["capture"])
-        g = c.get("geometry")
-        if g is None:
-            panels.append(
-                f"<div class='geometry-panel'><h3>{_h.escape(cap_name)}</h3>"
-                f"<p class='muted'>no geometry block (older JSON)</p></div>"
-            )
-            continue
-        d = g["derived"]
-        flag = g.get("quality_flag", "?")
-        flag_class = {"ok": "ok", "warn": "warn", "partial": "warn",
-                      "failed": "bad"}.get(flag, "")
-        box = d.get("active_picture_box")
-        if box is not None:
-            offset = d.get("picture_offset_from_ideal", {})
-            skew = d.get("corner_skew_px", {})
-            box_html = (
-                f"<table class='geo-table'>"
-                f"<tr>"
-                f"{_th('top', 'Y coord of the active picture top edge (mean of TL/TR detected apex y).')}"
-                f"{_th('left', 'X coord of the active picture left edge (mean of TL/BL detected apex x).')}"
-                f"{_th('bottom', 'Y coord of the active picture bottom edge.')}"
-                f"{_th('right', 'X coord of the active picture right edge.')}"
-                f"{_th('w&times;h', 'Picture width x height in pixels.')}</tr>"
-                f"<tr><td>{box['top']:.1f}</td><td>{box['left']:.1f}</td>"
-                f"<td>{box['bottom']:.1f}</td><td>{box['right']:.1f}</td>"
-                f"<td>{d['picture_extent_px']['width']:.1f}&times;"
-                f"{d['picture_extent_px']['height']:.1f}</td></tr></table>"
-                f"<div class='small'>"
-                f"offset <span class='{_delta_class_offset(offset.get('dx', 0), 2, 5)}'>"
-                f"dx={offset.get('dx', 0):+.1f}</span> "
-                f"<span class='{_delta_class_offset(offset.get('dy', 0), 2, 5)}'>"
-                f"dy={offset.get('dy', 0):+.1f}</span>"
-                f" &nbsp; skew "
-                f"<span class='{_delta_class_offset(skew.get('top_vs_bottom_width_diff', 0), 2, 5)}'>"
-                f"w_diff={skew.get('top_vs_bottom_width_diff', 0):.1f}</span> "
-                f"<span class='{_delta_class_offset(skew.get('left_vs_right_height_diff', 0), 2, 5)}'>"
-                f"h_diff={skew.get('left_vs_right_height_diff', 0):.1f}</span>"
-                f"</div>"
-            )
-        else:
-            box_html = "<p class='muted'>picture box not derivable</p>"
+def _spacing_row(label: str, entry: Dict[str, Any], tip: str) -> str:
+    actual = entry["actual"]
+    ideal = entry["ideal"]
+    delta = entry["delta"]
+    cls = _delta_class_offset(delta, 2, 5)
+    sign = f"{delta:+.1f}"
+    return (
+        f"<tr>"
+        f"<td class='tip' data-tip='{_h.escape(tip)}'>{label}</td>"
+        f"<td>{actual:.1f} px</td>"
+        f"<td class='muted'>ideal {ideal:.0f}</td>"
+        f"<td class='{cls}'>{sign}</td>"
+        f"</tr>"
+    )
 
-        clip = d.get("clip_detected") or {}
-        clip_rows = []
-        for tid in ("TL", "TR", "BL", "BR"):
-            entry = clip.get(tid, {})
-            visible = entry.get("apex_visible", False)
-            interp = entry.get("interpretation", "?")
-            cls = "ok" if visible else "bad"
-            clip_rows.append(
-                f"<tr><td>{tid}</td>"
-                f"<td class='{cls}'>{'visible' if visible else 'clipped'}</td>"
-                f"<td>{_h.escape(interp)}</td></tr>"
-            )
-        clip_html = (
-            f"<table class='geo-table'><tr>"
-            f"{_th('Corner', 'Boundary triangle corner ID: TL/TR/BL/BR.')}"
-            f"{_th('Apex', 'Whether the triangle apex was detected within the frame. clipped = apex appears off-frame (chart was zoomed/cropped in capture).')}"
-            f"{_th('Interpretation', 'Human-readable explanation of any apex-clipping.')}</tr>"
-            + "".join(clip_rows) + "</table>"
+
+def _dir_word_h(dx: float) -> str:
+    if abs(dx) < 0.05:
+        return "centered horizontally"
+    return f"{abs(dx):.1f} px {'right' if dx > 0 else 'left'}"
+
+
+def _dir_word_v(dy: float) -> str:
+    # y axis points down; negative dy = picture sits higher than ideal center.
+    if abs(dy) < 0.05:
+        return "centered vertically"
+    return f"{abs(dy):.1f} px {'down' if dy > 0 else 'up'}"
+
+
+def _render_geometry_panel(c: Dict[str, Any]) -> str:
+    cap_name = _basename(c["_meta"]["capture"])
+    g = c.get("geometry")
+    if g is None:
+        return (
+            f"<div class='geometry-panel'><h3>{_h.escape(cap_name)}</h3>"
+            f"<p class='muted'>no geometry block (older JSON)</p></div>"
         )
+    d = g["derived"]
+    summary = d.get("summary") or {}
+    flag = g.get("quality_flag", "?")
+    flag_class = {"ok": "ok", "warn": "warn", "partial": "warn",
+                  "failed": "bad"}.get(flag, "")
 
-        cross_off = d.get("cross_offset_from_ideal") or [None, None]
-        aperture = d.get("aperture_symmetry")
-        if cross_off[0] is not None and aperture is not None:
-            cross_html = (
-                f"<div class='small'>"
-                f"offset dx={cross_off[0]:+.2f}, dy={cross_off[1]:+.2f}"
-                f" &nbsp; aperture_symmetry={aperture:.3f}"
-                f"</div>"
-            )
+    # --- Arrowhead spacing (vs chart spec) ---
+    sp = summary.get("arrow_spacings_px")
+    if sp:
+        rows = (
+            _spacing_row("Top edge",    sp["top"],
+                         "TL→TR apex horizontal spacing.")
+            + _spacing_row("Bottom edge", sp["bottom"],
+                           "BL→BR apex horizontal spacing.")
+            + _spacing_row("Left edge",   sp["left"],
+                           "TL→BL apex vertical spacing.")
+            + _spacing_row("Right edge",  sp["right"],
+                           "TR→BR apex vertical spacing.")
+        )
+        spacing_html = (
+            "<table class='geo-table'>"
+            f"<tr>{_th('Edge', 'Picture edge defined by the two arrowhead apexes along it.')}"
+            f"{_th('Measured', 'Distance between detected arrowhead apexes, in capture pixels.')}"
+            f"{_th('Chart spec', 'Distance between the two apexes in the canonical 720×486 chart.')}"
+            f"{_th('Δ vs ideal', 'Measured − ideal. Positive = picture wider/taller than spec; negative = narrower/shorter.')}</tr>"
+            f"{rows}</table>"
+        )
+    else:
+        spacing_html = ("<p class='muted'>arrow spacings not derivable "
+                        "(one or more triangle apexes were not detected)</p>")
+
+    # --- Picture displacement (center offset + scale + keystone) ---
+    off = summary.get("picture_center_offset_px")
+    sc  = summary.get("picture_scale_pct")
+    ks  = summary.get("keystone_px")
+    if off and sc and ks:
+        dx, dy = off["dx"], off["dy"]
+        h_dev = sc["horizontal"] - 100.0
+        v_dev = sc["vertical"]   - 100.0
+        ks_h, ks_v = ks["horizontal_top_minus_bottom"], ks["vertical_left_minus_right"]
+
+        if abs(ks_h) < 0.05:
+            ks_h_text = "top and bottom widths match"
         else:
-            cross_html = "<p class='muted'>cross missing</p>"
-
-        aspect = d.get("aspect_ratio_check")
-        dvp = d.get("diameter_vs_picture_height")
-        circle_fit_rms = d.get("circle_fit_rms")
-        if aspect is not None:
-            dvp_str = f"{dvp:.3f}" if dvp is not None else "n/a"
-            rms_str = f"{circle_fit_rms:.2f}px" if circle_fit_rms is not None else "n/a"
-            circle_html = (
-                f"<div class='small'>"
-                f"aspect_ratio_check={aspect:.4f} &nbsp; "
-                f"diameter_vs_picture_height={dvp_str} &nbsp; "
-                f"fit_rms={rms_str}"
-                f"</div>"
+            ks_h_text = (
+                f"top is <span class='{_delta_class_offset(ks_h, 2, 5)}'>"
+                f"{abs(ks_h):.1f} px {'wider' if ks_h > 0 else 'narrower'}</span> than bottom"
             )
+        if abs(ks_v) < 0.05:
+            ks_v_text = "left and right heights match"
         else:
-            circle_html = "<p class='muted'>circle missing</p>"
+            ks_v_text = (
+                f"left is <span class='{_delta_class_offset(ks_v, 2, 5)}'>"
+                f"{abs(ks_v):.1f} px {'taller' if ks_v > 0 else 'shorter'}</span> than right"
+            )
 
-        refit = g.get("registration_refit", {})
-        mean_res = refit.get("final_residuals_px", {}).get("mean", float("nan"))
-        refit_html = (
+        disp_html = (
+            "<ul class='geo-list'>"
+            f"<li>Center shifted "
+            f"<span class='{_delta_class_offset(dx, 2, 5)}'>{_dir_word_h(dx)}</span>, "
+            f"<span class='{_delta_class_offset(dy, 2, 5)}'>{_dir_word_v(dy)}</span>.</li>"
+            f"<li>Horizontal scale "
+            f"<span class='{_delta_class_offset(h_dev, 1, 3)}'>{sc['horizontal']:.1f}%</span>, "
+            f"vertical scale "
+            f"<span class='{_delta_class_offset(v_dev, 1, 3)}'>{sc['vertical']:.1f}%</span>.</li>"
+            f"<li>Keystone: {ks_h_text}; {ks_v_text}.</li>"
+            "</ul>"
+        )
+    else:
+        disp_html = "<p class='muted'>displacement not derivable</p>"
+
+    # --- Clip detection ---
+    clip = d.get("clip_detected") or {}
+    clip_chips = []
+    for tid in ("TL", "TR", "BL", "BR"):
+        entry = clip.get(tid, {})
+        visible = entry.get("apex_visible", False)
+        interp = entry.get("interpretation", "?")
+        cls = "delta-good" if visible else "delta-bad"
+        label = "visible" if visible else "clipped"
+        clip_chips.append(
+            f"<span class='clip-chip {cls}' title='{_h.escape(interp)}'>"
+            f"{tid}: {label}</span>"
+        )
+    clip_html = "<div class='clip-chips'>" + " ".join(clip_chips) + "</div>"
+
+    # --- Registration cross (kept) ---
+    cross_off = d.get("cross_offset_from_ideal") or [None, None]
+    aperture = d.get("aperture_symmetry")
+    if cross_off[0] is not None and aperture is not None:
+        cross_html = (
             f"<div class='small'>"
-            f"inliers: {refit.get('inlier_count_initial', '?')} "
-            f"&rarr; <b>{refit.get('inlier_count_final', '?')}</b> "
-            f" &nbsp; mean_residual={mean_res:.2f}px"
+            f"Center offset dx={cross_off[0]:+.2f} px, dy={cross_off[1]:+.2f} px"
+            f" &nbsp;·&nbsp; aperture symmetry "
+            f"<span class='{_delta_class_offset((1.0-aperture)*100, 5, 15)}'>"
+            f"{aperture:.3f}</span> "
+            f"<span class='muted'>(1.00 = horizontal and vertical apertures match)</span>"
             f"</div>"
         )
+    else:
+        cross_html = "<p class='muted'>registration cross missing</p>"
 
-        fids_html = _render_fiducial_crops(c)
-
-        panels.append(
-            f"<div class='geometry-panel'>"
-            f"<h3>{_h.escape(cap_name)} "
-            f"<span class='{flag_class}'>[{flag}]</span></h3>"
-            f"<h4>Picture box</h4>{box_html}"
-            f"<h4>Clip detection</h4>{clip_html}"
-            f"<h4>Registration cross</h4>{cross_html}"
-            f"<h4>Black circle</h4>{circle_html}"
-            f"<h4>Refit benefit</h4>{refit_html}"
-            f"{fids_html}"
-            f"</div>"
+    # --- Circle (PAR-aware) ---
+    circ = summary.get("circle") or {}
+    hd = circ.get("horizontal_diameter_px")
+    vd = circ.get("vertical_diameter_px")
+    ahv = circ.get("actual_h_over_v")
+    ehv = circ.get("expected_h_over_v_for_round")
+    dc  = circ.get("displayed_circularity")
+    rot = circ.get("rotation_deg")
+    if hd is not None and vd is not None and ahv is not None and dc is not None:
+        dc_dev = dc - 1.0
+        if dc > 1.005:
+            shape_word = "horizontally stretched"
+        elif dc < 0.995:
+            shape_word = "vertically stretched"
+        else:
+            shape_word = "round"
+        rot_text = ""
+        if rot is not None:
+            # cv2.fitEllipse returns angle in [0, 180); near 0 or 180 means
+            # the major axis is the vertical one, near 90 means major axis
+            # is horizontal. Normalize to a small tilt-from-axis-aligned.
+            tilt = min(rot % 90.0, 90.0 - (rot % 90.0))
+            if tilt > 1.0:
+                rot_text = f" &nbsp;·&nbsp; tilt {tilt:.1f}°"
+        circle_html = (
+            "<ul class='geo-list'>"
+            f"<li>Horizontal diameter <b>{hd:.1f} px</b>, "
+            f"vertical diameter <b>{vd:.1f} px</b>.</li>"
+            f"<li>H/V ratio {ahv:.3f}; "
+            f"expected {ehv:.3f} for a round shape (NTSC 10:11 PAR).</li>"
+            f"<li>Displayed circularity "
+            f"<span class='{_delta_class_offset(dc_dev*100, 2, 5)}'>{dc:.3f}</span> "
+            f"— <b>{shape_word}</b> "
+            f"<span class='muted'>(1.00 = round in display; "
+            f"&gt;1 horizontally stretched, &lt;1 vertically stretched)</span>"
+            f"{rot_text}.</li>"
+            "</ul>"
         )
+    else:
+        circle_html = "<p class='muted'>circle not derivable (detector returned no fit)</p>"
 
+    # --- Refit benefit (diagnostic, kept) ---
+    refit = g.get("registration_refit", {})
+    mean_res = refit.get("final_residuals_px", {}).get("mean", float("nan"))
+    refit_html = (
+        f"<div class='small muted'>"
+        f"Registration refit: inliers {refit.get('inlier_count_initial', '?')} "
+        f"&rarr; <b>{refit.get('inlier_count_final', '?')}</b>, "
+        f"mean residual {mean_res:.2f} px"
+        f"</div>"
+    )
+
+    fids_html = _render_fiducial_crops(c)
+
+    return (
+        f"<div class='geometry-panel'>"
+        f"<h3>{_h.escape(cap_name)} "
+        f"<span class='{flag_class}'>[{flag}]</span></h3>"
+        f"<h4>Arrowhead spacing (vs chart spec)</h4>{spacing_html}"
+        f"<h4>Picture displacement</h4>{disp_html}"
+        f"<h4>Clip detection</h4>{clip_html}"
+        f"<h4>Registration cross</h4>{cross_html}"
+        f"<h4>Circle (PAR-aware, NTSC 10:11)</h4>{circle_html}"
+        f"{refit_html}"
+        f"{fids_html}"
+        f"</div>"
+    )
+
+
+def render_geometry_section(captures: List[Dict[str, Any]]) -> str:
+    panels = [_render_geometry_panel(c) for c in captures]
     return f"""
 <section class="geometry">
   <h2>Geometry</h2>
   <p class="legend">
-    Picture-in-raster geometry from the SW2 boundary triangles, picture-
-    centered registration cross, and black-ring circle. Active picture box
-    is bounded by the 4 triangle apexes (inferred from their back corners
-    when the apex is clipped). Aspect / aperture / fit_rms surface
-    decoder-side geometry artifacts; clip detection flags overscan or
-    letterboxing.
+    Picture-in-raster geometry derived from the SW2 chart's four arrowhead
+    fiducials, registration cross, and black ring. Spacings and offsets are
+    compared to the canonical 720×486 chart so any horizontal/vertical
+    displacement, scale error, or keystone shows up here. The ring check is
+    PAR-aware (NTSC has 10:11 non-square pixels): a perfectly-round display
+    reads displayed circularity = 1.00 even though the ring is elliptical
+    in raster pixels.
   </p>
   {''.join(panels)}
 </section>

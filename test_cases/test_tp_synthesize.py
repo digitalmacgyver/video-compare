@@ -196,17 +196,18 @@ def test_synthesize_renders_black_circle_dark_ring_at_expected_radius():
     Y, _, _ = tp_synthesize.synthesize(720, 486)
     bc = tp_chart.BLACK_CIRCLE
     cx, cy = bc["ideal_cx"], bc["ideal_cy"]
-    r = bc["expected_radius_px"]
-    # Sample 32 angles around the circle at radius r; most ring pixels should
-    # be dark (Y10 close to BLACK_Y10). Antialiasing may produce intermediate
-    # values right at edges, so use a tolerance.
+    # Synth now renders the ring as a PAR-elliptical ring (horizontal
+    # semi-axis = vertical * 11/10) to match real NTSC captures. Sample
+    # along that ellipse.
     import math
+    ry = bc["expected_radius_px"]
+    rx = ry * tp_chart.NTSC_PAR_X_OVER_Y
     dark_count = 0
     sampled = 0
     for i in range(32):
         theta = 2 * math.pi * i / 32
-        x = int(round(cx + r * math.cos(theta)))
-        y = int(round(cy + r * math.sin(theta)))
+        x = int(round(cx + rx * math.cos(theta)))
+        y = int(round(cy + ry * math.sin(theta)))
         if 0 <= x < 720 and 0 <= y < 486:
             sampled += 1
             if Y[y, x] < tp_chart.GREY_BACKGROUND_Y10 - 100:

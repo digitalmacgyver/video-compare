@@ -48,10 +48,15 @@ def _grid_intersection_impl(Y, ideal_x, ideal_y, search_window_px):
     col_proj = dark_mask.sum(axis=0).astype(np.float32)
     row_proj = dark_mask.sum(axis=1).astype(np.float32)
 
-    col_med = float(np.median(col_proj))
-    row_med = float(np.median(row_proj))
-    col_high = col_proj > col_med
-    row_high = row_proj > row_med
+    # Use 0.5 * peak as the "high" threshold (instead of median): the grid
+    # "+" has a single dominant column/row of dark pixels (~22 px tall);
+    # incidental dark features that grazes the window edge (e.g. the chart's
+    # boundary ring crossing the search window of a near-edge landmark) have
+    # only 1-3 dark pixels per column and are excluded.
+    col_thresh = 0.5 * float(col_proj.max())
+    row_thresh = 0.5 * float(row_proj.max())
+    col_high = col_proj >= col_thresh
+    row_high = row_proj >= row_thresh
 
     if col_high.sum() < 1 or row_high.sum() < 1:
         return None
@@ -463,11 +468,17 @@ def _detect_black_circle(Y, fid):
     if fit_rms > 5.0:
         return None
     confidence = max(0.0, 1.0 - fit_rms / 10.0)
+    # Direction-preserving axes from the midline point bounding box.
+    # Correct for axis-aligned ellipses with small tilt (real captures).
+    rx_horizontal_px = float((mxs.max() - mxs.min()) / 2.0)
+    ry_vertical_px = float((mys.max() - mys.min()) / 2.0)
     return {
         "cx": float(cx),
         "cy": float(cy),
         "rx": float(rx),
         "ry": float(ry),
+        "rx_horizontal_px": rx_horizontal_px,
+        "ry_vertical_px": ry_vertical_px,
         "rotation_deg": float(rot_deg),
         "fit_rms": fit_rms,
         "confidence": confidence,
@@ -790,7 +801,105 @@ def _derive_geometry(fiducials, M, width, height):
         derived["diameter_vs_picture_height"] = None
         derived["circle_fit_rms"] = None
 
+    derived["summary"] = _build_summary(fiducials)
     return derived
+
+
+def _spec_apex(tid):
+    return next(t["ideal_apex"] for t in tp_chart.BOUNDARY_TRIANGLES
+                if t["id"] == tid)
+
+
+def _build_summary(fiducials):
+    """Layperson-friendly summary derived from raw fiducials. All
+    measurements are in capture pixels and compared to the chart-spec
+    apex positions (no affine in this path — the raster is the chart's
+    canonical raster after tp_measure padding)."""
+    tris = fiducials["triangles"]
+    apexes = {tid: (tris.get(tid) or {}).get("apex_inferred")
+              for tid in ("TL", "TR", "BL", "BR")}
+
+    summary = {
+        "arrow_spacings_px": None,
+        "picture_center_offset_px": None,
+        "picture_scale_pct": None,
+        "keystone_px": None,
+        "circle": None,
+    }
+
+    if all(apexes[t] is not None for t in ("TL", "TR", "BL", "BR")):
+        TL, TR, BL, BR = (apexes["TL"], apexes["TR"], apexes["BL"], apexes["BR"])
+        TL_s = _spec_apex("TL"); TR_s = _spec_apex("TR")
+        BL_s = _spec_apex("BL"); BR_s = _spec_apex("BR")
+        ideal_horiz = TR_s[0] - TL_s[0]      # 357 by chart spec
+        ideal_vert  = BL_s[1] - TL_s[1]      # 483 by chart spec
+
+        top    = TR[0] - TL[0]
+        bottom = BR[0] - BL[0]
+        left   = BL[1] - TL[1]
+        right  = BR[1] - TR[1]
+        summary["arrow_spacings_px"] = {
+            "top":    {"actual": float(top),    "ideal": float(ideal_horiz),
+                       "delta": float(top    - ideal_horiz)},
+            "bottom": {"actual": float(bottom), "ideal": float(ideal_horiz),
+                       "delta": float(bottom - ideal_horiz)},
+            "left":   {"actual": float(left),   "ideal": float(ideal_vert),
+                       "delta": float(left   - ideal_vert)},
+            "right":  {"actual": float(right),  "ideal": float(ideal_vert),
+                       "delta": float(right  - ideal_vert)},
+        }
+
+        actual_cx = (TL[0] + TR[0] + BL[0] + BR[0]) / 4.0
+        actual_cy = (TL[1] + TR[1] + BL[1] + BR[1]) / 4.0
+        ideal_cx = (TL_s[0] + TR_s[0] + BL_s[0] + BR_s[0]) / 4.0
+        ideal_cy = (TL_s[1] + TR_s[1] + BL_s[1] + BR_s[1]) / 4.0
+        summary["picture_center_offset_px"] = {
+            "dx": float(actual_cx - ideal_cx),
+            "dy": float(actual_cy - ideal_cy),
+        }
+        summary["picture_scale_pct"] = {
+            "horizontal": float((top + bottom) / 2.0 / ideal_horiz * 100.0),
+            "vertical":   float((left + right) / 2.0 / ideal_vert  * 100.0),
+        }
+        summary["keystone_px"] = {
+            "horizontal_top_minus_bottom": float(top - bottom),
+            "vertical_left_minus_right":   float(left - right),
+        }
+
+    bc = fiducials.get("circle")
+    par = tp_chart.NTSC_PAR_X_OVER_Y
+    if bc is not None:
+        rx_h = bc.get("rx_horizontal_px")
+        ry_v = bc.get("ry_vertical_px")
+        if rx_h is not None and ry_v is not None and ry_v > 0:
+            actual_ratio = float(rx_h / ry_v)
+            summary["circle"] = {
+                "horizontal_diameter_px":      float(2.0 * rx_h),
+                "vertical_diameter_px":        float(2.0 * ry_v),
+                "expected_h_over_v_for_round": float(par),
+                "actual_h_over_v":             actual_ratio,
+                "displayed_circularity":       float(actual_ratio / par),
+                "rotation_deg":                float(bc.get("rotation_deg", 0.0)),
+            }
+        else:
+            summary["circle"] = {
+                "horizontal_diameter_px": None,
+                "vertical_diameter_px":   None,
+                "expected_h_over_v_for_round": float(par),
+                "actual_h_over_v":             None,
+                "displayed_circularity":       None,
+                "rotation_deg":                None,
+            }
+    else:
+        summary["circle"] = {
+            "horizontal_diameter_px": None,
+            "vertical_diameter_px":   None,
+            "expected_h_over_v_for_round": float(par),
+            "actual_h_over_v":             None,
+            "displayed_circularity":       None,
+            "rotation_deg":                None,
+        }
+    return summary
 
 
 def register_with_geometry(Y):
