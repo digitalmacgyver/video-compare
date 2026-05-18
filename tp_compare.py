@@ -246,55 +246,52 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
     """Composite scoreboard at the very top of the report. One row per
     capture, with per-category 0-100 scores and an overall (mean of the
     available categories). Sortable so you can rank processors on any
-    dimension."""
+    dimension. Column order matches the order of the detail sections
+    below."""
     head = (
         "<tr>"
         + _sortable_th("Capture",
                        "Capture file name.", kind="text")
         + _sortable_th("Geometry",
-                       "0-100 score combining arrowhead-spacing error, "
-                       "picture scale, keystone, and PAR-aware "
-                       "circularity. Higher = closer to a perfect raster.")
+                       "Picture-in-raster correctness: arrowhead "
+                       "spacing, scale, keystone, PAR-aware circularity. "
+                       "Higher = the raster matches the chart.")
         + _sortable_th("Color",
-                       "0-100 score from the mean Euclidean YUV10 distance "
-                       "between the 8 tartan patches and chart spec. "
-                       "Higher = better color match.")
-        + _sortable_th("Grayscale",
-                       "0-100 score from mean |ΔY| across the 4 IRE steps, "
-                       "with an extra penalty for chroma cast on neutral "
-                       "patches.")
-        + _sortable_th("Frequency",
-                       "0-100 score combining row-2 burst luma loss + "
-                       "chroma leak, plus the wedge -6 dB cutoff and "
-                       "first chroma-intrusion frequency. Higher = wider "
-                       "luma bandwidth and cleaner Y/C separation.")
+                       "Tartan color match: mean YUV10 distance from "
+                       "chart spec across the 8 SMPTE 75% patches. "
+                       "Higher = more faithful color reproduction.")
         + _sortable_th("Chroma Lin",
-                       "0-100 score from the magenta saturation "
-                       "staircase. Penalises non-linear chroma gain "
-                       "(33/66/100 % boxes deviating from a linear "
-                       "ramp) and differential phase (hue drifting as "
-                       "saturation rises).")
+                       "Chroma non-linearity: magenta saturation "
+                       "staircase R² and differential phase. Higher = "
+                       "saturated colors stay on-hue.")
+        + _sortable_th("Grayscale",
+                       "Gray-step accuracy: mean |ΔY| at 20/40/60/80% "
+                       "IRE plus a chroma-cast penalty. Higher = neutral "
+                       "tonal scale.")
         + _sortable_th("Pulse",
-                       "0-100 score from the three 2T pulse-and-bar "
-                       "cells. Penalises FWHM broadening past the "
-                       "chart-spec 200 ns, ringing and echoes on the "
-                       "white-on-grey pulse, and the presence of a "
-                       "black clipper that hides footroom distortions.")
+                       "2T pulse transient response: FWHM ≈ 200 ns, "
+                       "ringing / echo, black-clipper presence. Higher "
+                       "= clean sharp transitions.")
+        + _sortable_th("Frequency",
+                       "Row-2 burst luma + Y/C-separation behaviour at "
+                       "3.58/4.43 MHz and 300/400 TVL diagonals. "
+                       "Higher = wider luma bandwidth and cleaner Y/C.")
         + _sortable_th("Wedge",
-                       "0-100 score from the radial wedge in cell "
-                       "(8,11). Penalises resolution shortfall below "
-                       "400 TVL, cross-color leak into the luma-only "
-                       "wedge, and H/V aperture asymmetry.")
+                       "Radial wedge resolution and decoder cross-"
+                       "effects (≤ 450 TVL). Higher = sharper image "
+                       "with no cross-color or H/V aperture asymmetry.")
+        + _sortable_th("VertRes",
+                       "Vertical-axis modulation at 100/200/300 TVL. "
+                       "Higher = the decoder preserves vertical detail.")
         + _sortable_th("Y/C",
-                       "0-100 score from the row-9 Y/C-timing chroma "
-                       "bursts sampled across 3 frames. Penalises "
-                       "frame-to-frame dot-crawl wiggle and narrow "
-                       "chroma bandwidth.")
+                       "Row-9 chroma bursts measured across 3 frames "
+                       "for dot-crawl wiggle + chroma bandwidth. "
+                       "Higher = stable, full-bandwidth chroma.")
         + _sortable_th("ZonePlate",
-                       "0-100 score from chroma RMS over the moving "
-                       "zone-plate area, averaged across 3 frames. "
-                       "Higher = cleaner Y/C separation on "
-                       "high-frequency moving luma content.")
+                       "Cross-color injected into the moving zone-plate "
+                       "(luma-only) area, averaged over 3 frames. "
+                       "Higher = no false color on detailed moving "
+                       "content.")
         + _sortable_th("Overall",
                        "Mean of the available category scores.")
         + "</tr>"
@@ -304,25 +301,27 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
         name = _basename(c["_meta"]["capture"])
         g  = _score_geometry(c)
         co = _score_color(c)
-        gs = _score_grayscale(c)
-        fq = _score_frequency(c)
         cl = _score_chroma_staircase(c)
+        gs = _score_grayscale(c)
         pl = _score_pulse(c)
+        fq = _score_frequency(c)
         rw = _score_radial_wedge(c)
+        vr = _score_vertical_response(c)
         yc = _score_yc_timing(c)
         zp = _score_zone_plate(c)
-        vals = [v for v in (g, co, gs, fq, cl, pl, rw, yc, zp)
+        vals = [v for v in (g, co, cl, gs, pl, fq, rw, vr, yc, zp)
                 if v is not None and not (isinstance(v, float) and v != v)]
         overall = sum(vals) / len(vals) if vals else float("nan")
         cells = [
             _td_name(name),
             _td_num(g,       "{:.1f}", cls=_score_class(g)),
             _td_num(co,      "{:.1f}", cls=_score_class(co)),
-            _td_num(gs,      "{:.1f}", cls=_score_class(gs)),
-            _td_num(fq,      "{:.1f}", cls=_score_class(fq)),
             _td_num(cl,      "{:.1f}", cls=_score_class(cl)),
+            _td_num(gs,      "{:.1f}", cls=_score_class(gs)),
             _td_num(pl,      "{:.1f}", cls=_score_class(pl)),
+            _td_num(fq,      "{:.1f}", cls=_score_class(fq)),
             _td_num(rw,      "{:.1f}", cls=_score_class(rw)),
+            _td_num(vr,      "{:.1f}", cls=_score_class(vr)),
             _td_num(yc,      "{:.1f}", cls=_score_class(yc)),
             _td_num(zp,      "{:.1f}", cls=_score_class(zp)),
             _td_num(overall, "{:.1f}", cls=_score_class(overall)),
@@ -341,6 +340,65 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
     <thead>{head}</thead>
     <tbody>{''.join(rows)}</tbody>
   </table>
+  <details class="legend-key">
+    <summary>What each column measures</summary>
+    <dl class="metric-key">
+      <dt>Geometry</dt>
+      <dd>How faithfully the picture is positioned, scaled, and shaped
+        inside the raster (arrowhead spacings, scale, keystone,
+        PAR-aware circularity). Drives whether straight edges look
+        straight and circles look round — the foundation of "the
+        picture looks right".</dd>
+      <dt>Color</dt>
+      <dd>Tartan-patch reproduction. Tells you whether saturated SMPTE
+        colors come back at the right hue and saturation. Off-color
+        readings look unnatural on skin tones and brand colors.</dd>
+      <dt>Chroma Lin</dt>
+      <dd>Whether color reproduces linearly with saturation (33 %, 66 %,
+        100 % magenta stay on the same hue and scale 1:2:3 in chroma
+        magnitude). Failures look like mid-saturation colors
+        drifting in hue, or pastels and saturated tones being
+        compressed against each other.</dd>
+      <dt>Grayscale</dt>
+      <dd>Tonal accuracy at 20/40/60/80 % IRE plus chroma neutrality.
+        Failures appear as wrong overall brightness, crushed shadows
+        / blown highlights, or a tint on what should be neutral
+        grays.</dd>
+      <dt>Pulse</dt>
+      <dd>2T pulse-and-bar transient response: how sharply the
+        decoder reproduces a 200 ns edge, how much it rings, and
+        whether a black clipper hides below-pedestal undershoots.
+        Drives perceived <i>crispness</i> on text and hard edges.</dd>
+      <dt>Frequency</dt>
+      <dd>High-frequency luma response + Y/C separation at the row-2
+        bursts (3.58 MHz NTSC subcarrier, 4.43 MHz PAL, 300 / 400
+        TVL diagonals). Drives both fine-detail clarity AND the
+        absence of false color on busy luma.</dd>
+      <dt>Wedge</dt>
+      <dd>Radial-wedge resolution limit (up to ~450 TVL) plus decoder
+        cross-effects: cross-color injection and H/V aperture
+        balance. Drives image sharpness and whether the decoder
+        tints high-frequency detail.</dd>
+      <dt>VertRes</dt>
+      <dd>Vertical-axis modulation at 100 / 200 / 300 TVL. Drives
+        whether horizontal lines and fine vertical detail stay sharp
+        through scan converters, deinterlacers, and vertical
+        sharpeners.</dd>
+      <dt>Y/C</dt>
+      <dd>Multi-frame dot-crawl analysis on row-9 chroma bursts plus
+        chroma bandwidth. Dot crawl looks like shimmering dots that
+        crawl along vertical color edges; narrow chroma bandwidth
+        looks like washed-out fine color detail.</dd>
+      <dt>ZonePlate</dt>
+      <dd>Cross-color injected into the moving zone-plate area in the
+        center of the chart (luma-only by design). Drives whether
+        moving high-detail content acquires false color.</dd>
+      <dt>Overall</dt>
+      <dd>Mean of the categories above. A rough single-number
+        ranking; the column scores tell you where each processor
+        spends its strengths and weaknesses.</dd>
+    </dl>
+  </details>
 </section>
 """
 
@@ -559,6 +617,202 @@ def render_grayscale_overview(captures: List[Dict[str, Any]]) -> str:
     <thead>{head}</thead>
     <tbody>{''.join(rows)}</tbody>
   </table>
+</section>
+"""
+
+
+# ---------------------------------------------------------------------
+# Vertical-axis frequency response (col 1, rows 4..6).
+# ---------------------------------------------------------------------
+
+def _vertical_response_data(c: Dict[str, Any]):
+    return c.get("vertical_response") or {}
+
+
+def _vmod_class(pct):
+    if pct is None:
+        return ""
+    if pct >= 70:
+        return "delta-good"
+    if pct >= 40:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def _score_vertical_response(c: Dict[str, Any]) -> float:
+    """0-100. Higher mean modulation across the 100/200/300 TVL
+    vertical bursts = better vertical-axis resolution. Penalise the
+    shortfall from 100 %."""
+    s = (_vertical_response_data(c).get("summary") or {})
+    mean = s.get("mean_modulation_pct")
+    if mean is None:
+        return float("nan")
+    # 100 % = no penalty; 50 % = full penalty.
+    pen = _clamp((100.0 - mean) * 1.5, 0, 100)
+    return max(0.0, 100.0 - pen)
+
+
+def render_vertical_response_overview(captures: List[Dict[str, Any]]) -> str:
+    head = (
+        "<tr>"
+        + _sortable_th("Capture",
+                       "Capture file name.", kind="text")
+        + _sortable_th("Mean modulation %",
+                       "Mean luma modulation across the three "
+                       "vertical bursts. Higher = the decoder "
+                       "preserves vertical detail.")
+        + _sortable_th("100 TVL %",
+                       "Modulation at the 100 TVL vertical burst "
+                       "(easy — well within vertical resolution).")
+        + _sortable_th("200 TVL %",
+                       "Modulation at the 200 TVL vertical burst.")
+        + _sortable_th("300 TVL %",
+                       "Modulation at the 300 TVL vertical burst — "
+                       "the stiffest vertical-response test.")
+        + "</tr>"
+    )
+    rows = []
+    for c in captures:
+        name = _basename(c["_meta"]["capture"])
+        s = (_vertical_response_data(c).get("summary") or {})
+        mean = s.get("mean_modulation_pct")
+        m100 = s.get("modulation_at_100tvl")
+        m200 = s.get("modulation_at_200tvl")
+        m300 = s.get("modulation_at_300tvl")
+        cells = [
+            _td_name(name),
+            _td_num(mean, "{:.1f}", cls=_vmod_class(mean)),
+            _td_num(m100, "{:.1f}", cls=_vmod_class(m100)),
+            _td_num(m200, "{:.1f}", cls=_vmod_class(m200)),
+            _td_num(m300, "{:.1f}", cls=_vmod_class(m300)),
+        ]
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"""
+<section class="overview">
+  <h2>Vertical Response Overview</h2>
+  <p class="legend">
+    Headline numbers from the three slightly-oblique horizontal-stripe
+    bursts on the left edge of the chart at 100, 200, and 300 TVL.
+    Modulation is the peak-to-peak luma swing in the burst, as a
+    percent of full chart contrast — higher = the decoder preserves
+    vertical detail.
+  </p>
+  <table class="overview-table">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
+def _vmod_verdict(pct):
+    if pct is None:
+        return "—"
+    if pct >= 80:
+        return f"clean ({pct:.0f}%)"
+    if pct >= 50:
+        return f"moderate rolloff ({pct:.0f}%)"
+    if pct >= 20:
+        return f"heavy rolloff ({pct:.0f}%)"
+    return f"vertical resolution lost ({pct:.0f}%)"
+
+
+def _render_vertical_response_panel(c: Dict[str, Any]) -> str:
+    cap_name = _basename(c["_meta"]["capture"])
+    vr = _vertical_response_data(c)
+    if not vr:
+        return (f"<div class='color-panel'><h3>{_h.escape(cap_name)}</h3>"
+                f"<p class='muted'>no vertical response data — re-run "
+                f"tp_measure.</p></div>")
+    regions = vr.get("regions") or []
+    summary = vr.get("summary") or {}
+    rows_html = []
+    for r in regions:
+        tvl = r.get("target_tvl")
+        mod = r.get("modulation_pct")
+        snr = r.get("snr_db")
+        det = r.get("detected_freq_cycles_per_row")
+        target = r.get("target_freq_cycles_per_row")
+        if mod is None:
+            rows_html.append(
+                f"<tr><td class='name'>{tvl} TVL</td>"
+                f"<td colspan='4' class='muted small'>"
+                f"{r.get('error', 'not measured')}</td></tr>"
+            )
+            continue
+        rows_html.append(
+            f"<tr>"
+            f"<td class='name'>{tvl} TVL</td>"
+            f"<td class='delta'>"
+            f"{(target * 486 * 2 if target else 0):.0f} "
+            f"<span class='muted small'>(target)</span></td>"
+            f"<td class='delta'>"
+            f"{(det * 486 * 2 if det else 0):.0f} "
+            f"<span class='muted small'>(detected)</span></td>"
+            f"<td class='delta {_vmod_class(mod)}'>{mod:.1f}%</td>"
+            f"<td class='delta'>"
+            f"{('—' if snr is None else f'{snr:.1f} dB')}</td>"
+            f"<td class='verdict'>{_h.escape(_vmod_verdict(mod))}</td>"
+            f"</tr>"
+        )
+    mean = summary.get("mean_modulation_pct")
+    summary_html = (
+        "<ul class='geo-list'>"
+        f"<li>Mean modulation across the 3 bursts: <b>"
+        f"<span class='{_vmod_class(mean)}'>"
+        f"{('—' if mean is None else f'{mean:.1f}%')}</span></b></li>"
+        f"<li>Rolloff: <b>"
+        f"{(summary.get('modulation_at_100tvl') or 0):.0f}% → "
+        f"{(summary.get('modulation_at_200tvl') or 0):.0f}% → "
+        f"{(summary.get('modulation_at_300tvl') or 0):.0f}%</b> "
+        f"<span class='muted'>(100 → 200 → 300 TVL).</span></li>"
+        "</ul>"
+    )
+    return (
+        f"<div class='color-panel'>"
+        f"<h3>{_h.escape(cap_name)}</h3>"
+        f"<table class='color-table'>"
+        f"<tr>{_th('Burst', 'Vertical-frequency burst.')}"
+        f"{_th('Target', 'Chart-spec TVL of this burst, computed from the labelled frequency.')}"
+        f"{_th('Detected', 'TVL inferred from the FFT peak — small deviations from target are sampling noise.')}"
+        f"{_th('Modulation', 'Peak-to-peak luma swing at the burst frequency, as a percent of full chart contrast (black→white = 100 %).')}"
+        f"{_th('SNR', 'Signal-to-noise ratio of the peak vs the median FFT magnitude. Higher = burst clearly resolved.')}"
+        f"{_th('Verdict', 'Plain-language summary.')}"
+        f"</tr>"
+        + "".join(rows_html) +
+        f"</table>"
+        f"<h4>Summary</h4>{summary_html}"
+        f"</div>"
+    )
+
+
+def render_vertical_response_panels(captures: List[Dict[str, Any]]) -> str:
+    if not any(c.get("vertical_response") for c in captures):
+        return ""
+    intro = """
+<p class="legend">
+  The slightly-oblique near-horizontal stripe bursts in col 1, rows
+  4 / 5 / 6 probe vertical-axis resolution at 100, 200, and 300 TVL.
+  The stripes are deliberately tilted a few degrees so any straight-
+  horizontal interlace-comb or vertical-aperture filter inside the
+  decoder shows up as additional asymmetric modulation.
+</p>
+<p class="legend">
+  <b>Why this matters:</b> the vertical-frequency response is what
+  scan converters, deinterlacers, and vertical-aperture sharpeners
+  modify. A decoder that rolls off above 200 TVL gives a soft
+  picture; one with too much vertical peaking produces ringing /
+  edge enhancement that looks crisp on test patterns but artificial
+  on real content. Modulation should stay high at 100 and 200 TVL
+  with a graceful taper toward 300 TVL.
+</p>
+"""
+    panels = [_render_vertical_response_panel(c) for c in captures]
+    return f"""
+<section class="vertical-response-panels">
+  <h2>Vertical Response — 100 / 200 / 300 TVL bursts</h2>
+  {intro}
+  {''.join(panels)}
 </section>
 """
 
@@ -2062,16 +2316,44 @@ def _render_tartan_panel(c: Dict[str, Any]) -> str:
 
 def render_tartan_panels(captures: List[Dict[str, Any]]) -> str:
     panels = [_render_tartan_panel(c) for c in captures]
+    intro = """
+<p class="legend">
+  <b>What it shows:</b> The chart carries 8 small color patches in a
+  tartan arrangement — the canonical SMPTE 75 % bar colors (yellow,
+  cyan, blue, red on the top row; magenta, green, plus duplicate red
+  and cyan on the bottom row). The bottom row deliberately repeats
+  red and cyan in different positions to create vertical chroma
+  transitions that stress comb-decoders.
+</p>
+<p class="legend">
+  <b>What it measures:</b> How faithfully the decoder reproduces each
+  patch's chrominance and luminance. We compare every measured patch
+  to its Rec.601 chart-spec value and report ΔY / ΔU / ΔV (the raw
+  10-bit code differences), ΔE (a plain Euclidean YUV10 distance you
+  can rank against), and saturation as a percentage of the ideal
+  chroma magnitude.
+</p>
+<p class="legend">
+  <b>Why TV engineers and viewers care:</b> Color shifts here propagate
+  to every other color the decoder reproduces. Skin tones, brand
+  colors, and broadcast-graphics colors all live close to these
+  SMPTE primaries; a few per-cent error in saturation or a small hue
+  rotation produces unmistakably "wrong" color on real content.
+  Engineers also use the bottom-row duplicates to gauge comb-decoder
+  performance — the magenta/red vertical transition is where
+  line-comb decoders typically leak chroma into luma.
+</p>
+<p class="legend">
+  <b>How we characterize each capture:</b> One row per color with
+  ideal-vs-measured swatches side-by-side, raw YUV10 deltas, an
+  overall ΔE score, the measured saturation %, and a plain-language
+  verdict ("match" / "close" / "off" plus saturation flags).
+</p>
+"""
     return f"""
 <section class="tartan-panels">
   <h2>Color (Tartan) — per capture</h2>
-  <p class="legend">
-    Each row is one of the 8 SMPTE 75% colors on the chart. The
-    ref/cap swatches show the ideal next to the sampled color; ΔY/ΔU/ΔV
-    are the underlying 10-bit code deltas; ΔE is a plain Euclidean
-    YUV10 distance you can rank against. The Sat % column flags
-    saturation loss or boost.
-  </p>
+  {intro}
   {''.join(panels)}
 </section>
 """
@@ -2837,9 +3119,33 @@ def render_gray_panels(captures: List[Dict[str, Any]]) -> str:
 <section class="gray-panels">
   <h2>Grayscale — per capture</h2>
   <p class="legend">
-    The 4 grayscale steps at 20/40/60/80 % IRE. Y is measured against
-    the chart-spec ideal; the chroma column flags any tint on what
-    should be a neutral patch (comb-decoder smell).
+    <b>What it shows:</b> A 4-step neutral grayscale ramp at 20 %, 40 %,
+    60 %, and 80 % IRE in the upper-left composite region of the
+    chart. Each step is a small uniform patch carrying only luminance
+    — no chroma should be present.
+  </p>
+  <p class="legend">
+    <b>What it measures:</b> Two things at once. First, the decoder's
+    <i>tonal accuracy</i> — does the measured Y10 land on the
+    chart-spec value at each step (linearity of the luma transfer
+    function and correct black/white setup)? Second, the decoder's
+    <i>chroma neutrality</i> on luma-only content — any non-zero U
+    or V offset on a gray patch betrays a tint introduced by the
+    decoder.
+  </p>
+  <p class="legend">
+    <b>Why TV engineers and viewers care:</b> Grayscale errors look
+    like the picture is too dark, too bright, washed out, or
+    crushed. Lifted blacks reduce contrast; non-linear gray steps
+    distort gamma and produce wrong skin tones. A chroma cast on
+    grays is the smell test for sloppy comb-decoder design: it
+    leaks chroma into what should be neutral.
+  </p>
+  <p class="legend">
+    <b>How we characterize each capture:</b> One row per step with
+    ideal-vs-measured swatches side-by-side, the ideal and
+    measured Y10 codes, the signed ΔY, the U/V offset from neutral
+    (chroma cast), and a plain-language verdict.
   </p>
   {''.join(panels)}
 </section>
@@ -3240,6 +3546,13 @@ table.overview-table tbody tr:nth-child(odd) { background: rgba(255,255,255,0.01
 .radial-wedge-fig img { display: block; border: 1px solid #2a2e36;
     image-rendering: pixelated; background: #14161a;
     max-width: 480px; max-height: 480px; }
+.legend-key { margin: 8px 0; font-size: 12px; color: #b8c0cc;
+    background: #1d2026; padding: 6px 12px; border: 1px solid #2a2e36;
+    border-radius: 4px; }
+.legend-key summary { cursor: pointer; color: #c5d1e0; font-weight: 600; }
+dl.metric-key { margin: 8px 0 0 0; line-height: 1.5; }
+dl.metric-key dt { color: #f0b450; font-weight: 600; margin-top: 8px; }
+dl.metric-key dd { margin: 2px 0 0 16px; color: #c5d1e0; }
 .radial-wedge-fig figcaption { font-size: 11px; color: #b8c0cc;
     margin-top: 4px; max-width: 480px; }
 """
@@ -3548,18 +3861,50 @@ def _render_geometry_panel(c: Dict[str, Any]) -> str:
 
 def render_geometry_section(captures: List[Dict[str, Any]]) -> str:
     panels = [_render_geometry_panel(c) for c in captures]
+    intro = """
+<p class="legend">
+  <b>What it shows:</b> Four arrowhead fiducials mark the corners of
+  the active picture (TL / TR / BL / BR); a small black-on-white
+  registration cross sits in the upper-right; and a large black ring
+  circumscribes the picture height. Every other measurement in the
+  report relies on locating these features accurately.
+</p>
+<p class="legend">
+  <b>What it measures:</b> The picture's position, size, and shape
+  inside the 720 × 486 NTSC SDI raster. Specifically: arrowhead
+  spacing along each edge (horizontal vs the chart spec of 357 px,
+  vertical vs 483 px), picture-center displacement, horizontal /
+  vertical scale percentages, keystone (top-vs-bottom width
+  difference), and a PAR-aware circularity check on the black ring
+  (NTSC 10:11 pixel aspect ratio means a circle in display space is
+  an ellipse in the raster — a perfectly-round display reads
+  circularity = 1.00).
+</p>
+<p class="legend">
+  <b>Why TV engineers and viewers care:</b> Geometry errors are the
+  most visually-disturbing kind. A picture shifted or scaled wrong
+  means content runs off-screen or sits in the wrong spot;
+  keystoning makes straight edges curve; an aspect ratio error
+  makes circles look like ovals and faces look squished or
+  stretched. Engineers also use the geometry block to validate
+  registration — if the chart's chart-spec features are mis-
+  located, the rest of the measurements are sampling the wrong
+  pixels.
+</p>
+<p class="legend">
+  <b>How we characterize each capture:</b> An arrowhead spacing
+  table (top / bottom / left / right vs chart spec), a picture-
+  displacement summary (center shift, H/V scale %, keystone),
+  per-corner clip detection (apex visible vs clipped), the
+  registration cross's center offset and aperture symmetry, and
+  the PAR-aware circle's horizontal / vertical diameter plus the
+  displayed-circularity ratio.
+</p>
+"""
     return f"""
 <section class="geometry">
   <h2>Geometry</h2>
-  <p class="legend">
-    Picture-in-raster geometry derived from the SW2 chart's four arrowhead
-    fiducials, registration cross, and black ring. Spacings and offsets are
-    compared to the canonical 720×486 chart so any horizontal/vertical
-    displacement, scale error, or keystone shows up here. The ring check is
-    PAR-aware (NTSC has 10:11 non-square pixels): a perfectly-round display
-    reads displayed circularity = 1.00 even though the ring is elliptical
-    in raster pixels.
-  </p>
+  {intro}
   {''.join(panels)}
 </section>
 """
@@ -3959,15 +4304,23 @@ def render_decoder_class(captures: List[Dict[str, Any]]) -> str:
 
 def render_page(captures: List[Dict[str, Any]]) -> str:
     title = f"SW2 Comparison — {len(captures)} captures"
+    # Canonical section order (used in three places: the Overall
+    # Summary columns above, the per-section Overview tables here, and
+    # the per-capture detail panels below). Logical grouping:
+    #   foundation: Geometry
+    #   color:      Tartan → Chroma Linearity → Grayscale
+    #   sharpness:  Pulse → Frequency (row-2) → Frequency Wedge → VertRes → Radial Wedge
+    #   chroma Y/C: Y/C Timing → Zone Plate
     overviews = (
         render_overall_summary(captures)
         + render_geometry_overview(captures)
         + render_tartan_overview(captures)
+        + render_chroma_staircase_overview(captures)
         + render_grayscale_overview(captures)
+        + render_pulse_overview(captures)
         + render_frequency_response_overview(captures)
         + render_frequency_wedge_overview(captures)
-        + render_chroma_staircase_overview(captures)
-        + render_pulse_overview(captures)
+        + render_vertical_response_overview(captures)
         + render_radial_wedge_overview(captures)
         + render_yc_timing_overview(captures)
         + render_zone_plate_overview(captures)
@@ -3975,11 +4328,12 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
     details = (
         render_geometry_section(captures)
         + render_tartan_panels(captures)
+        + render_chroma_staircase_panels(captures)
         + render_gray_panels(captures)
+        + render_pulse_panels(captures)
         + render_frequency_response_section(captures)
         + render_frequency_wedge_section(captures)
-        + render_chroma_staircase_panels(captures)
-        + render_pulse_panels(captures)
+        + render_vertical_response_panels(captures)
         + render_radial_wedge_panels(captures)
         + render_yc_timing_panels(captures)
         + render_zone_plate_panels(captures)

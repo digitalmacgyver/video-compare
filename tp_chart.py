@@ -501,6 +501,57 @@ CHROMA_STAIRCASE_REGIONS = _build_chroma_staircase_regions()
 
 
 # =====================================================================
+# VERTICAL FREQUENCY-RESPONSE BURSTS (cells 4..6, col 1)
+# =====================================================================
+#
+# Slightly-oblique near-horizontal stripe bursts in col 1, rows 4/5/6.
+# The chart labels them "TVL 100", "200", "300" (in cells 3,1 / 5,1 /
+# 6,1 — operator-verified). They probe vertical resolution: scan
+# converters, vertical-aperture enhancers, and deinterlacers all
+# leave fingerprints here.
+#
+# Sample boxes are 28×28 centered in each 60×54 cell, well away from
+# the chart border at col=0.
+
+_VERTICAL_BURST_RAW = [
+    # (id,               target_tvl, cell_y_top)
+    ("VBURST_100TVL",    100,        162),    # cell (4,1)
+    ("VBURST_200TVL",    200,        216),    # cell (5,1)
+    ("VBURST_300TVL",    300,        270),    # cell (6,1)
+]
+
+
+VERTICAL_BURST_REGIONS = [
+    {
+        "id":             rid,
+        "target_tvl":     int(tvl),
+        "freq_cycles_per_row": float(tvl) / 486.0,
+        # Box centered around (cell_x_mid, cell_y_mid) = (29, cell_y_top+27),
+        # 28×28. Use even x for 4:2:2 alignment (chroma not used here, but
+        # for consistency with the other catalogs).
+        "ideal_box":      (16, cell_y_top - 13, 28, 28)
+                          if (cell_y_top - 13) % 1 == 0
+                          else (16, cell_y_top - 13, 28, 28),
+        "stripe_angle_deg": 6.0,   # slight tilt vs horizontal
+    }
+    for rid, tvl, cell_y_top in _VERTICAL_BURST_RAW
+]
+# TVL (TV-lines) counts each black-or-white line as one line, so a
+# pattern at N TVL has N/2 full black-white cycles spread across the
+# picture height. freq_cycles_per_row = TVL / (2 * 486).
+VERTICAL_BURST_REGIONS = [
+    {
+        "id":             rid,
+        "target_tvl":     int(tvl),
+        "freq_cycles_per_row": float(tvl) / (2.0 * 486.0),
+        "ideal_box":      (16, cell_y_top + 13, 28, 28),
+        "stripe_angle_deg": 6.0,
+    }
+    for rid, tvl, cell_y_top in _VERTICAL_BURST_RAW
+]
+
+
+# =====================================================================
 # 2T PULSE-AND-BAR REGIONS (cells 4..6, 12)
 # =====================================================================
 #

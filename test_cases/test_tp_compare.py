@@ -1119,6 +1119,108 @@ def test_overall_summary_includes_zone_plate_column():
     assert ">ZonePlate<" in html
 
 
+def _make_capture_with_vert_response(tag, *, mean=85.0,
+                                     m100=95.0, m200=85.0, m300=75.0):
+    c = _make_capture_json_with_geometry(tag)
+    c["vertical_response"] = {
+        "regions": [
+            {"id": "VBURST_100TVL", "target_tvl": 100,
+             "target_freq_cycles_per_row": 100 / 972.0,
+             "detected_freq_cycles_per_row": 100 / 972.0,
+             "modulation_pct": m100, "modulation_pk_pk_y10": m100 * 8.76,
+             "snr_db": 25.0,
+             "sample_box_capture": [16, 175, 28, 28]},
+            {"id": "VBURST_200TVL", "target_tvl": 200,
+             "target_freq_cycles_per_row": 200 / 972.0,
+             "detected_freq_cycles_per_row": 200 / 972.0,
+             "modulation_pct": m200, "modulation_pk_pk_y10": m200 * 8.76,
+             "snr_db": 20.0,
+             "sample_box_capture": [16, 229, 28, 28]},
+            {"id": "VBURST_300TVL", "target_tvl": 300,
+             "target_freq_cycles_per_row": 300 / 972.0,
+             "detected_freq_cycles_per_row": 300 / 972.0,
+             "modulation_pct": m300, "modulation_pk_pk_y10": m300 * 8.76,
+             "snr_db": 15.0,
+             "sample_box_capture": [16, 283, 28, 28]},
+        ],
+        "summary": {
+            "mean_modulation_pct": mean,
+            "modulation_at_100tvl": m100,
+            "modulation_at_200tvl": m200,
+            "modulation_at_300tvl": m300,
+        },
+    }
+    return c
+
+
+def test_vertical_response_overview_lists_capture_and_metrics():
+    a = _make_capture_with_vert_response("alpha")
+    html = tp_compare.render_vertical_response_overview([a])
+    assert "Vertical Response Overview" in html
+    assert "100 TVL" in html and "200 TVL" in html and "300 TVL" in html
+    assert "alpha.mov" in html
+
+
+def test_vertical_response_panel_shows_three_bursts_and_summary():
+    a = _make_capture_with_vert_response("alpha", m100=95.0, m200=85.0,
+                                          m300=75.0)
+    html = tp_compare.render_vertical_response_panels([a])
+    assert "Vertical Response — 100 / 200 / 300 TVL" in html
+    assert "alpha.mov" in html
+    # 3 burst rows
+    for tvl in (100, 200, 300):
+        assert f"{tvl} TVL" in html
+    # Verdict
+    assert "clean" in html or "moderate" in html
+
+
+def test_score_vertical_response_clean_signal_high():
+    a = _make_capture_with_vert_response("a", mean=90.0)
+    score = tp_compare._score_vertical_response(a)
+    assert score >= 80, f"clean vertical scored {score}"
+
+
+def test_score_vertical_response_soft_signal_lowers():
+    a_sharp = _make_capture_with_vert_response("a", mean=90.0)
+    a_soft  = _make_capture_with_vert_response("b", mean=40.0)
+    delta = tp_compare._score_vertical_response(a_sharp) - \
+            tp_compare._score_vertical_response(a_soft)
+    assert delta >= 30
+
+
+def test_overall_summary_includes_vertical_response_column():
+    a = _make_capture_with_vert_response("alpha")
+    html = tp_compare.render_overall_summary([a])
+    assert ">VertRes<" in html
+
+
+def test_overall_summary_legend_key_describes_all_columns():
+    """The 'What each column measures' details block should list every
+    overview category so the layperson reader has a glossary."""
+    a = _make_capture_with_vert_response("alpha")
+    html = tp_compare.render_overall_summary([a])
+    assert "What each column measures" in html
+    for category in ("Geometry", "Color", "Chroma Lin", "Grayscale",
+                     "Pulse", "Frequency", "Wedge", "VertRes", "Y/C",
+                     "ZonePlate", "Overall"):
+        assert category in html
+
+
+def test_measure_vertical_response_on_synth_resolves_bursts():
+    import tp_synthesize, tp_register, tp_measure
+    Y, U, V = tp_synthesize.synthesize()
+    M = tp_register.register(Y)["affine_matrix"]
+    if M is None:
+        return
+    import numpy as np
+    res = tp_measure.measure_vertical_response(
+        Y, np.asarray(M, dtype=np.float32))
+    s = res["summary"]
+    # 100 TVL is well within Nyquist — should resolve cleanly.
+    assert s["modulation_at_100tvl"] is not None
+    assert s["modulation_at_100tvl"] > 40
+
+
 def test_render_page_places_registration_summary_in_appendix():
     a = _make_capture_json_with_geometry("alpha")
     b = _make_capture_json_with_geometry("beta")
@@ -1190,6 +1292,13 @@ TESTS_NO_TMPDIR = [
     test_score_zone_plate_clean_signal_high,
     test_score_zone_plate_heavy_cross_color_lowers,
     test_overall_summary_includes_zone_plate_column,
+    test_vertical_response_overview_lists_capture_and_metrics,
+    test_vertical_response_panel_shows_three_bursts_and_summary,
+    test_score_vertical_response_clean_signal_high,
+    test_score_vertical_response_soft_signal_lowers,
+    test_overall_summary_includes_vertical_response_column,
+    test_overall_summary_legend_key_describes_all_columns,
+    test_measure_vertical_response_on_synth_resolves_bursts,
     test_render_page_places_registration_summary_in_appendix,
 ]
 TESTS_TMPDIR = [test_compare_cli_writes_html]

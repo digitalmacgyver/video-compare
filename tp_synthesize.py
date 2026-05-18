@@ -155,6 +155,33 @@ def _draw_chroma_bursts(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> None:
         V[y:y + h, x // 2:(x + w) // 2] = stripe_v[None, :]
 
 
+def _draw_vertical_bursts(Y: np.ndarray) -> None:
+    """Render the three vertical-frequency bursts in cells (4..6, 1) —
+    slightly-tilted near-horizontal stripes at the chart-spec vertical
+    frequency. These are used to probe vertical-axis resolution
+    (scan converters, deinterlacers, vertical-aperture enhancers)."""
+    for r in tp_chart.VERTICAL_BURST_REGIONS:
+        x, y, w, h = r["ideal_box"]
+        freq_cpr = r["freq_cycles_per_row"]   # cycles per row
+        angle_deg = r.get("stripe_angle_deg", 0.0)
+        theta = np.deg2rad(angle_deg)
+        # Stripes have constant phase along (sin θ, cos θ): a near-
+        # horizontal stripe means the phase axis is nearly (0, 1)
+        # (i.e., y). With the small angle θ, the projection axis is
+        # (sin θ, cos θ).
+        xs = np.arange(w, dtype=np.float32)
+        ys = np.arange(h, dtype=np.float32)
+        xx, yy = np.meshgrid(xs, ys)
+        # proj has units of "rows along the perpendicular-to-stripes
+        # axis" — multiply by 2π * freq_cpr to get phase.
+        proj = xx * np.sin(theta) + yy * np.cos(theta)
+        phase = 2.0 * np.pi * freq_cpr * proj
+        tile = np.where(np.sin(phase) >= 0,
+                        tp_chart.WHITE_Y10,
+                        tp_chart.BLACK_Y10).astype(np.uint16)
+        Y[y:y + h, x:x + w] = tile
+
+
 def _draw_radial_wedge(Y: np.ndarray) -> None:
     """Render the radial wedge (Siemens-star-style resolution probe) in
     cell (8,11). N alternating black/white pie wedges between
@@ -343,6 +370,7 @@ def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndar
     _draw_wedge_column(Y)
     _draw_pulse_cells(Y)
     _draw_radial_wedge(Y)
+    _draw_vertical_bursts(Y)
     _draw_bursts(Y)
     _draw_saturated_chroma_blocks(Y, U, V)
     _draw_chroma_bursts(Y, U, V)

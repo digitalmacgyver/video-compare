@@ -973,6 +973,104 @@ def measure_yc_timing(capture_path: str, frame_index: int,
     }
 
 
+def measure_vertical_response(Y, affine) -> Dict[str, Any]:
+    """Sample the slightly-oblique horizontal-stripe bursts in cells
+    (4..6, 1) and report per-cell luma modulation as a probe of the
+    decoder's vertical-axis resolution.
+
+    Per cell: project the chart-spec box, FFT each column of the box
+    (vertical line through the burst), pick the magnitude in a narrow
+    band around the expected vertical frequency (TVL / 486 cycles
+    per row), then average the magnitudes across columns. Because
+    the bursts are oblique, each column has a different phase but
+    the FFT magnitudes are phase-independent — averaging preserves
+    the signal.
+    """
+    contrast = float(tp_chart.WHITE_Y10 - tp_chart.BLACK_Y10)
+    regions_out = []
+    for r in tp_chart.VERTICAL_BURST_REGIONS:
+        x, y, w, h = r["ideal_box"]
+        cx, cy = _apply_affine(affine, x + w / 2.0, y + h / 2.0)
+        x0 = max(0, int(round(cx - w / 2.0)))
+        y0 = max(0, int(round(cy - h / 2.0)))
+        x1 = min(Y.shape[1], x0 + w)
+        y1 = min(Y.shape[0], y0 + h)
+        if x1 <= x0 or y1 <= y0:
+            regions_out.append({
+                "id": r["id"], "target_tvl": r["target_tvl"],
+                "modulation_pct": None, "error": "out_of_frame",
+            })
+            continue
+        win = Y[y0:y1, x0:x1].astype(np.float64)
+        n_rows = win.shape[0]
+        if n_rows < 8:
+            regions_out.append({
+                "id": r["id"], "target_tvl": r["target_tvl"],
+                "modulation_pct": None, "error": "window_too_small",
+            })
+            continue
+        freq_cpr = r["freq_cycles_per_row"]
+        freqs = np.fft.rfftfreq(n_rows, d=1.0)
+        tol = max(0.04, 0.25 * freq_cpr)
+        band = np.abs(freqs - freq_cpr) <= tol
+        if not band.any():
+            band = np.zeros_like(freqs, dtype=bool)
+            band[int(np.argmin(np.abs(freqs - freq_cpr)))] = True
+        # Per-column FFT magnitude in the band; average across columns.
+        peak_amps = []
+        detected_freqs = []
+        for c in range(win.shape[1]):
+            line = win[:, c]
+            line_dm = line - line.mean()
+            spec = np.fft.rfft(line_dm)
+            mags = np.abs(spec) * 2.0 / n_rows
+            band_mags = mags[band]
+            band_freqs = freqs[band]
+            i_local = int(np.argmax(band_mags))
+            peak_amps.append(float(band_mags[i_local] * 2.0))  # → peak-to-peak
+            detected_freqs.append(float(band_freqs[i_local]))
+        mean_amp = float(np.mean(peak_amps))
+        mod_pct = float(mean_amp / contrast * 100.0)
+        detected_freq = float(np.mean(detected_freqs))
+        # SNR: compare peak amplitude with the median magnitude across all
+        # non-DC bins from a single representative column.
+        center_col = win[:, win.shape[1] // 2] - win[:, win.shape[1] // 2].mean()
+        full_spec = np.abs(np.fft.rfft(center_col)) * 2.0 / n_rows
+        noise = float(np.median(full_spec[1:])) if len(full_spec) > 1 else 0.0
+        if noise > 0:
+            snr_db = float(20.0 * np.log10(mean_amp / noise))
+        else:
+            snr_db = float("inf")
+        regions_out.append({
+            "id":              r["id"],
+            "target_tvl":      r["target_tvl"],
+            "target_freq_cycles_per_row": freq_cpr,
+            "detected_freq_cycles_per_row": detected_freq,
+            "modulation_pct":  mod_pct,
+            "modulation_pk_pk_y10": mean_amp,
+            "snr_db":          snr_db,
+            "sample_box_capture": [x0, y0, x1 - x0, y1 - y0],
+        })
+
+    valid = [r for r in regions_out if r.get("modulation_pct") is not None]
+    if not valid:
+        return {"regions": regions_out, "summary": {}}
+    pcts = [r["modulation_pct"] for r in valid]
+    summary = {
+        "mean_modulation_pct": float(sum(pcts) / len(pcts)),
+        "modulation_at_100tvl": next(
+            (r["modulation_pct"] for r in valid if r["target_tvl"] == 100),
+            None),
+        "modulation_at_200tvl": next(
+            (r["modulation_pct"] for r in valid if r["target_tvl"] == 200),
+            None),
+        "modulation_at_300tvl": next(
+            (r["modulation_pct"] for r in valid if r["target_tvl"] == 300),
+            None),
+    }
+    return {"regions": regions_out, "summary": summary}
+
+
 def measure_zone_plate(capture_path: str, frame_index: int,
                        affine, n_frames: int = 3) -> Dict[str, Any]:
     """Measure chroma RMS over the moving-zone-plate region (cells
@@ -1144,6 +1242,7 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
     radial_wedge = measure_radial_wedge(Y_p, U_p, V_p, M)
     yc_timing = measure_yc_timing(capture_path, frame_index, M, n_frames=3)
     zone_plate = measure_zone_plate(capture_path, frame_index, M, n_frames=3)
+    vertical_response = measure_vertical_response(Y_p, M)
 
     return {
         "_meta": meta,
@@ -1159,6 +1258,7 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
         "radial_wedge":       radial_wedge,
         "yc_timing":          yc_timing,
         "zone_plate":         zone_plate,
+        "vertical_response":  vertical_response,
     }
 
 
