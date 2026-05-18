@@ -429,6 +429,179 @@ def test_render_frequency_response_section_includes_intro_and_reference():
     assert "clean Y/C" in html or "chroma leak" in html
 
 
+def test_overall_summary_includes_frequency_column():
+    a = _make_capture_json_with_geometry("alpha")
+    html = tp_compare.render_overall_summary([a])
+    assert "Frequency" in html
+    # 5 sortable header columns now: Capture, Geometry, Color, Grayscale,
+    # Frequency, Overall — at least 5 data-sort attrs (text + 5 num) is OK.
+    assert html.count("data-sort=\"num\"") >= 5
+
+
+def test_wedge_overview_lists_minus6db_and_chroma_columns():
+    a = _make_capture_json_with_geometry("alpha")
+    a["frequency_response"] = {
+        "regions": {
+            "WEDGE_2p0MHz":  {"modulation_pct": 90, "modulation_db": -0.9},
+            "WEDGE_2p5MHz":  {"modulation_pct": 85, "modulation_db": -1.4},
+            "WEDGE_3MHz":    {"modulation_pct": 78, "modulation_db": -2.2},
+            "WEDGE_3p5MHz":  {"modulation_pct": 60, "modulation_db": -4.4},
+            "WEDGE_4MHz":    {"modulation_pct": 48, "modulation_db": -6.4},
+            "WEDGE_4p5MHz":  {"modulation_pct": 30, "modulation_db": -10.5},
+            "WEDGE_5MHz":    {"modulation_pct": 18, "modulation_db": -14.9},
+        },
+        "summary": {},
+    }
+    a["artifacts"] = {
+        "regions": {
+            "XC_WEDGE_2p0MHz": {"chroma_rms": 1.0},
+            "XC_WEDGE_2p5MHz": {"chroma_rms": 1.5},
+            "XC_WEDGE_3MHz":   {"chroma_rms": 4.0},
+            "XC_WEDGE_3p5MHz": {"chroma_rms": 15.0},
+            "XC_WEDGE_4MHz":   {"chroma_rms": 60.0},
+            "XC_WEDGE_4p5MHz": {"chroma_rms": 110.0},
+            "XC_WEDGE_5MHz":   {"chroma_rms": 220.0},
+        },
+        "summary": {}, "thresholds": {},
+    }
+    html = tp_compare.render_frequency_wedge_overview([a])
+    assert "Frequency Wedge Overview" in html
+    # Headers
+    assert "Luma -6 dB" in html and "First chroma intrusion" in html
+    # The -6 dB cutoff sits between 3.5 MHz (-4.4 dB) and 4.0 MHz (-6.4 dB).
+    # Linear interp gives ≈ 3.85 MHz — at least the first two digits.
+    assert "3.8" in html or "3.9" in html
+    # First chroma intrusion at 3.5 MHz (rms 15 crosses the threshold).
+    assert "3.50" in html
+
+
+def test_render_frequency_wedge_section_renders_intro_and_per_capture_panel():
+    a = _make_capture_json_with_geometry("alpha")
+    a["frequency_response"] = {
+        "regions": {b: {"modulation_pct": 60.0, "modulation_db": -4.4}
+                    for b, _, _ in tp_compare.WEDGE_SAMPLE_FREQS},
+        "summary": {},
+    }
+    a["artifacts"] = {
+        "regions": {x: {"chroma_rms": 5.0}
+                    for _, x, _ in tp_compare.WEDGE_SAMPLE_FREQS},
+        "summary": {}, "thresholds": {},
+    }
+    html = tp_compare.render_frequency_wedge_section([a])
+    assert "Frequency Wedge — narrowing-stripe analysis" in html
+    # Intro explains failure modes
+    assert "Mid-grey takeover" in html or "Color creep" in html
+    # Per-capture panel header
+    assert "alpha.mov" in html
+    # 7 freq rows from 2.0 to 5.0 MHz
+    for f in (2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0):
+        assert f"{f:.1f} MHz" in html
+
+
+def test_score_frequency_clean_signal_high_score():
+    a = _make_capture_json_with_geometry("alpha")
+    a["frequency_response"] = {
+        "regions": {
+            "BURST_3p58":        {"modulation_pct": 60.0, "modulation_db": -4.4},
+            "BURST_4p43":        {"modulation_pct": 50.0, "modulation_db": -6.0},
+            "BURST_300TVL_DIAG": {"modulation_pct": 55.0, "modulation_db": -5.2},
+            "BURST_400TVL_DIAG": {"modulation_pct": 45.0, "modulation_db": -6.9},
+            "WEDGE_2p0MHz":  {"modulation_pct": 88, "modulation_db": -1.1},
+            "WEDGE_2p5MHz":  {"modulation_pct": 80, "modulation_db": -1.9},
+            "WEDGE_3MHz":    {"modulation_pct": 70, "modulation_db": -3.1},
+            "WEDGE_3p5MHz":  {"modulation_pct": 60, "modulation_db": -4.4},
+            "WEDGE_4MHz":    {"modulation_pct": 55, "modulation_db": -5.2},
+            "WEDGE_4p5MHz":  {"modulation_pct": 50, "modulation_db": -6.0},
+            "WEDGE_5MHz":    {"modulation_pct": 45, "modulation_db": -6.9},
+        },
+        "summary": {},
+    }
+    a["artifacts"] = {
+        "regions": {
+            "XC_BURST_3p58":  {"chroma_rms": 1.0},
+            "XC_BURST_4p43":  {"chroma_rms": 1.0},
+            "XC_BURST_300TVL":{"chroma_rms": 3.0},
+            "XC_BURST_400TVL":{"chroma_rms": 3.0},
+            "XC_WEDGE_2p0MHz": {"chroma_rms": 1.0},
+            "XC_WEDGE_2p5MHz": {"chroma_rms": 1.0},
+            "XC_WEDGE_3MHz":   {"chroma_rms": 1.0},
+            "XC_WEDGE_3p5MHz": {"chroma_rms": 1.0},
+            "XC_WEDGE_4MHz":   {"chroma_rms": 2.0},
+            "XC_WEDGE_4p5MHz": {"chroma_rms": 3.0},
+            "XC_WEDGE_5MHz":   {"chroma_rms": 4.0},
+        },
+        "summary": {}, "thresholds": {},
+    }
+    score = tp_compare._score_frequency(a)
+    assert score >= 90, f"clean signal scored only {score}"
+
+
+def test_score_frequency_heavy_cross_color_low_score():
+    a = _make_capture_json_with_geometry("alpha")
+    a["frequency_response"] = {
+        "regions": {
+            "BURST_3p58":        {"modulation_pct": 70, "modulation_db": -3.0},
+            "BURST_4p43":        {"modulation_pct": 60, "modulation_db": -4.4},
+            "BURST_300TVL_DIAG": {"modulation_pct":  1, "modulation_db": -40.0},
+            "BURST_400TVL_DIAG": {"modulation_pct":  0, "modulation_db": -50.0},
+            "WEDGE_2p0MHz":  {"modulation_pct": 70, "modulation_db": -3.1},
+            "WEDGE_2p5MHz":  {"modulation_pct": 60, "modulation_db": -4.4},
+            "WEDGE_3MHz":    {"modulation_pct": 40, "modulation_db": -7.9},
+            "WEDGE_3p5MHz":  {"modulation_pct": 15, "modulation_db": -16.5},
+            "WEDGE_4MHz":    {"modulation_pct":  3, "modulation_db": -30},
+            "WEDGE_4p5MHz":  {"modulation_pct":  1, "modulation_db": -40},
+            "WEDGE_5MHz":    {"modulation_pct":  1, "modulation_db": -40},
+        },
+        "summary": {},
+    }
+    a["artifacts"] = {
+        "regions": {
+            "XC_BURST_3p58":  {"chroma_rms": 1.0},
+            "XC_BURST_4p43":  {"chroma_rms": 1.0},
+            "XC_BURST_300TVL":{"chroma_rms": 400.0},
+            "XC_BURST_400TVL":{"chroma_rms": 450.0},
+            "XC_WEDGE_2p0MHz": {"chroma_rms": 1.0},
+            "XC_WEDGE_2p5MHz": {"chroma_rms": 30.0},
+            "XC_WEDGE_3MHz":   {"chroma_rms": 80.0},
+            "XC_WEDGE_3p5MHz": {"chroma_rms": 200.0},
+            "XC_WEDGE_4MHz":   {"chroma_rms": 300.0},
+            "XC_WEDGE_4p5MHz": {"chroma_rms": 400.0},
+            "XC_WEDGE_5MHz":   {"chroma_rms": 500.0},
+        },
+        "summary": {}, "thresholds": {},
+    }
+    score = tp_compare._score_frequency(a)
+    assert score < 60, f"heavy cross-color processor scored {score} (expected <60)"
+
+
+def test_render_freq_burst_panel_includes_failure_mode_chips():
+    a = _make_capture_json_with_geometry("alpha")
+    a["frequency_response"] = {
+        "regions": {
+            "BURST_3p58":        {"modulation_pct": 70, "modulation_db": -3.0},
+            "BURST_4p43":        {"modulation_pct": 60, "modulation_db": -4.4},
+            "BURST_300TVL_DIAG": {"modulation_pct":  1, "modulation_db": -40.0},
+            "BURST_400TVL_DIAG": {"modulation_pct": 50, "modulation_db": -6.0},
+        },
+        "summary": {},
+    }
+    a["artifacts"] = {
+        "regions": {
+            "XC_BURST_3p58":  {"chroma_rms": 1.0},
+            "XC_BURST_4p43":  {"chroma_rms": 1.0},
+            "XC_BURST_300TVL":{"chroma_rms": 400.0},
+            "XC_BURST_400TVL":{"chroma_rms": 3.0},
+        },
+        "summary": {}, "thresholds": {},
+    }
+    html = tp_compare.render_frequency_response_section([a])
+    # Both failure-mode chip vocabularies should appear
+    assert "luma pass" in html
+    assert "luma lost" in html
+    assert "heavy cross-color" in html
+    assert "Y/C clean" in html
+
+
 def test_render_page_places_registration_summary_in_appendix():
     a = _make_capture_json_with_geometry("alpha")
     b = _make_capture_json_with_geometry("beta")
@@ -460,6 +633,12 @@ TESTS_NO_TMPDIR = [
     test_overall_summary_table_lists_each_capture_with_scores,
     test_render_frequency_response_overview_handles_missing_data,
     test_render_frequency_response_section_includes_intro_and_reference,
+    test_overall_summary_includes_frequency_column,
+    test_wedge_overview_lists_minus6db_and_chroma_columns,
+    test_render_frequency_wedge_section_renders_intro_and_per_capture_panel,
+    test_score_frequency_clean_signal_high_score,
+    test_score_frequency_heavy_cross_color_low_score,
+    test_render_freq_burst_panel_includes_failure_mode_chips,
     test_render_page_places_registration_summary_in_appendix,
 ]
 TESTS_TMPDIR = [test_compare_cli_writes_html]

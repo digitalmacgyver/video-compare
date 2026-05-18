@@ -215,12 +215,14 @@ def test_black_circle_catalog():
 
 def test_burst_regions_catalog():
     ids = [r["id"] for r in tp_chart.BURST_REGIONS]
-    assert len(ids) == 11
     expected = {"BURST_3p58", "BURST_4p43", "BURST_4p286_SECAM",
                 "BURST_300TVL_DIAG", "BURST_400TVL_DIAG",
-                "WEDGE_3MHz", "WEDGE_4MHz", "WEDGE_5MHz",
+                "WEDGE_2p0MHz", "WEDGE_2p5MHz", "WEDGE_3MHz",
+                "WEDGE_3p5MHz", "WEDGE_4MHz", "WEDGE_4p5MHz",
+                "WEDGE_5MHz",
                 "YC_BURST_1p0MHZ", "YC_BURST_0p5MHZ", "YC_BURST_1p5MHZ"}
     assert set(ids) == expected
+    assert len(ids) == len(expected)
     valid_kinds = {"burst_vertical", "burst_diagonal", "wedge_segment",
                    "chroma_burst"}
     for r in tp_chart.BURST_REGIONS:
@@ -241,8 +243,11 @@ def test_artifact_regions_catalog():
     ids = [r["id"] for r in tp_chart.ARTIFACT_REGIONS]
     expected = {"HD_RED_TOP", "HD_MAGENTA_TOP", "DC_TARTAN_BELOW",
                 "XC_BURST_3p58", "XC_BURST_4p43",
-                "XC_BURST_300TVL", "XC_BURST_400TVL", "XC_WEDGE_4MHz",
-                "XC_WEDGE_5MHz", "XL_RED_INTERIOR", "XL_MAGENTA_INTERIOR",
+                "XC_BURST_300TVL", "XC_BURST_400TVL",
+                "XC_WEDGE_2p0MHz", "XC_WEDGE_2p5MHz", "XC_WEDGE_3MHz",
+                "XC_WEDGE_3p5MHz", "XC_WEDGE_4MHz",
+                "XC_WEDGE_4p5MHz", "XC_WEDGE_5MHz",
+                "XL_RED_INTERIOR", "XL_MAGENTA_INTERIOR",
                 "ZP_CHROMA_LEAK", "XC_RADIAL_WEDGE", "WEDGE_HV_SYMMETRY"}
     assert set(ids) == expected
     valid_kinds = {"hanging_dots", "dot_crawl", "cross_color",

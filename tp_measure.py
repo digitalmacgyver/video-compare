@@ -506,6 +506,15 @@ def _main():
             print(f"wrote {fids_path} ({fids_bgr.shape[1]}x{fids_bgr.shape[0]})")
         except Exception as e:
             print(f"WARNING: fiducial-crops PNG generation failed: {e}", file=sys.stderr)
+        try:
+            import tp_wedge_crops
+            import cv2
+            wedge_bgr = tp_wedge_crops.build(args.capture, args.output, args.frame)
+            wedge_path = stem + "_wedge.png"
+            cv2.imwrite(wedge_path, wedge_bgr)
+            print(f"wrote {wedge_path} ({wedge_bgr.shape[1]}x{wedge_bgr.shape[0]})")
+        except Exception as e:
+            print(f"WARNING: wedge-crops PNG generation failed: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

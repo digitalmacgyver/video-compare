@@ -406,8 +406,16 @@ _BURST_RAW = [
     ("BURST_4p286_SECAM", "burst_vertical", 4.286,    (76,  391, 28, 28), {}),
     ("BURST_300TVL_DIAG", "burst_diagonal", 3.95,     (256, 67,  28, 28), {"stripe_angle_deg": 45}),
     ("BURST_400TVL_DIAG", "burst_diagonal", 5.27,     (436, 67,  28, 28), {"stripe_angle_deg": 45}),
+    # Continuous frequency wedge in column 10 (cells 3..6,10) spans
+    # 1.5 MHz at y=108 to 5.5 MHz at y=324 (slope 1 MHz per 54 px).
+    # Sample at 0.5 MHz intervals — 7 measurement points characterizes the
+    # rolloff curve cleanly and falls within the wedge column on the chart.
+    ("WEDGE_2p0MHz",      "wedge_segment",  2.0,      (556, 121, 28, 28), {}),
+    ("WEDGE_2p5MHz",      "wedge_segment",  2.5,      (556, 148, 28, 28), {}),
     ("WEDGE_3MHz",        "wedge_segment",  3.0,      (556, 175, 28, 28), {}),
+    ("WEDGE_3p5MHz",      "wedge_segment",  3.5,      (556, 202, 28, 28), {}),
     ("WEDGE_4MHz",        "wedge_segment",  4.0,      (556, 229, 28, 28), {}),
+    ("WEDGE_4p5MHz",      "wedge_segment",  4.5,      (556, 256, 28, 28), {}),
     ("WEDGE_5MHz",        "wedge_segment",  5.0,      (556, 283, 28, 28), {}),
     # Row-9 Y/C timing chroma bursts (alternating chroma stripes at the
     # labeled frequency). Used to measure chroma bandwidth AND the cross-
@@ -421,6 +429,33 @@ _BURST_RAW = [
     ("YC_BURST_1p5MHZ",   "chroma_burst",   1.5,      (432, 446, 36, 28),
         {"color_pair": "red_cyan"}),
 ]
+
+# Continuous-wedge geometry for synth rendering and visual crops.
+# Spans cells (3..6, 10) of the chart. Frequency rises linearly from
+# `freq_top` at y=`y_top` to `freq_bottom` at y=`y_bottom`.
+# `x` is inset by 16 px from the cell border at x=540 so neither the
+# vertical grid line at x=540 nor grid landmark L9's 24-px search
+# window (x=528..552) is contaminated by wedge stripes. Real captures
+# already exhibit a similar inset; the existing 28-wide measurement
+# boxes (x=556..584) fit cleanly inside.
+WEDGE_COLUMN = {
+    "x":           556,
+    "y_top":       108,
+    "y_bottom":    324,
+    "width":       44,
+    "freq_top":    1.5,
+    "freq_bottom": 5.5,
+}
+
+
+def wedge_column_freq_at_y(y: float) -> float:
+    """Return the local frequency (MHz) at vertical position y inside the
+    continuous wedge. Used by tp_synthesize and by tp_compare's visual
+    crop labeling to keep both sides consistent."""
+    w = WEDGE_COLUMN
+    t = (y - w["y_top"]) / (w["y_bottom"] - w["y_top"])
+    return w["freq_top"] + t * (w["freq_bottom"] - w["freq_top"])
+
 
 BURST_REGIONS = [
     {
@@ -462,7 +497,12 @@ _ARTIFACT_RAW = [
     ("XC_BURST_4p43",        "cross_color",             (616, 67,  28,  28)),
     ("XC_BURST_300TVL",      "cross_color",             (256, 67,  28,  28)),
     ("XC_BURST_400TVL",      "cross_color",             (436, 67,  28,  28)),
+    ("XC_WEDGE_2p0MHz",      "cross_color",             (556, 121, 28,  28)),
+    ("XC_WEDGE_2p5MHz",      "cross_color",             (556, 148, 28,  28)),
+    ("XC_WEDGE_3MHz",        "cross_color",             (556, 175, 28,  28)),
+    ("XC_WEDGE_3p5MHz",      "cross_color",             (556, 202, 28,  28)),
     ("XC_WEDGE_4MHz",        "cross_color",             (556, 229, 28,  28)),
+    ("XC_WEDGE_4p5MHz",      "cross_color",             (556, 256, 28,  28)),
     ("XC_WEDGE_5MHz",        "cross_color",             (556, 283, 28,  28)),
     ("XL_RED_INTERIOR",      "cross_luma",              (600, 445, 60,  30)),
     ("XL_MAGENTA_INTERIOR",  "cross_luma",              (130, 445, 40,  30)),

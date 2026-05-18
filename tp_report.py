@@ -35,27 +35,10 @@ def _enumerate_captures(directory: str, patterns: List[str]) -> List[str]:
     return unique
 
 
-def _ensure_json(capture_path: str, json_path: str, frame_index: int,
-                 force: bool, with_overlays: bool) -> bool:
-    """Run tp_measure if needed; return True if a usable JSON exists at the
-    end. Writes overlay/fiducial sidecar PNGs unless with_overlays is False."""
-    if os.path.exists(json_path) and not force:
-        return True
-    import tp_measure
-    try:
-        data = tp_measure.measure(capture_path, frame_index)
-    except Exception as e:
-        print(f"WARNING: tp_measure failed on {capture_path}: {e}",
-              file=sys.stderr)
-        return False
-    with open(json_path, "w") as f:
-        json.dump(data, f, indent=2, default=float)
-    print(
-        f"  wrote {json_path}: "
-        f"registration={data['_meta']['registration']['quality_flag']}"
-    )
-    if not with_overlays:
-        return True
+def _write_sidecars(capture_path: str, json_path: str,
+                    frame_index: int) -> None:
+    """Generate the per-capture sidecar PNGs (overlay / fiducial crops /
+    wedge crop). Each is best-effort: failures log but don't abort."""
     stem = os.path.splitext(json_path)[0]
     try:
         import tp_sample_overlay
@@ -71,6 +54,45 @@ def _ensure_json(capture_path: str, json_path: str, frame_index: int,
         cv2.imwrite(stem + "_fiducials.png", fids_bgr)
     except Exception as e:
         print(f"  WARNING: fiducial-crops PNG failed: {e}", file=sys.stderr)
+    try:
+        import tp_wedge_crops
+        import cv2
+        wedge_bgr = tp_wedge_crops.build(capture_path, json_path, frame_index)
+        cv2.imwrite(stem + "_wedge.png", wedge_bgr)
+    except Exception as e:
+        print(f"  WARNING: wedge-crops PNG failed: {e}", file=sys.stderr)
+
+
+def _ensure_json(capture_path: str, json_path: str, frame_index: int,
+                 force: bool, with_overlays: bool) -> bool:
+    """Run tp_measure if needed and (re-)generate sidecar PNGs. Returns
+    True if a usable JSON exists at the end. If `force` is False and
+    the JSON already exists, the measurement is skipped but sidecars
+    are regenerated unconditionally (cheap, and lets the report pick
+    up newly-added sidecar types without forcing a full re-measure)."""
+    stem = os.path.splitext(json_path)[0]
+    if not os.path.exists(json_path) or force:
+        import tp_measure
+        try:
+            data = tp_measure.measure(capture_path, frame_index)
+        except Exception as e:
+            print(f"WARNING: tp_measure failed on {capture_path}: {e}",
+                  file=sys.stderr)
+            return False
+        with open(json_path, "w") as f:
+            json.dump(data, f, indent=2, default=float)
+        print(
+            f"  wrote {json_path}: "
+            f"registration={data['_meta']['registration']['quality_flag']}"
+        )
+    if with_overlays:
+        # Only regenerate sidecars that are missing (or always if force).
+        needs = (force
+                 or not os.path.exists(stem + "_overlay.png")
+                 or not os.path.exists(stem + "_fiducials.png")
+                 or not os.path.exists(stem + "_wedge.png"))
+        if needs:
+            _write_sidecars(capture_path, json_path, frame_index)
     return True
 
 

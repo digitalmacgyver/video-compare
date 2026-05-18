@@ -155,6 +155,25 @@ def _draw_chroma_bursts(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> None:
         V[y:y + h, x // 2:(x + w) // 2] = stripe_v[None, :]
 
 
+def _draw_wedge_column(Y: np.ndarray) -> None:
+    """Render the continuous frequency wedge in column 10. Local
+    frequency rises linearly from tp_chart.WEDGE_COLUMN['freq_top'] to
+    'freq_bottom' over the y range, while stripes remain vertical (so
+    horizontal frequency is what's modulated)."""
+    w = tp_chart.WEDGE_COLUMN
+    x0 = w["x"]; y0 = w["y_top"]; y1 = w["y_bottom"]; box_w = w["width"]
+    sample_rate = tp_chart.NTSC_SAMPLE_RATE_MHZ
+    for row_y in range(y0, y1):
+        freq = tp_chart.wedge_column_freq_at_y(row_y)
+        period = sample_rate / freq
+        xs = np.arange(box_w, dtype=np.float32)
+        phase = 2.0 * np.pi * xs / period
+        row = np.where(
+            np.sin(phase) >= 0, tp_chart.WHITE_Y10, tp_chart.BLACK_Y10
+        ).astype(np.uint16)
+        Y[row_y, x0:x0 + box_w] = row
+
+
 def _draw_bursts(Y: np.ndarray) -> None:
     """Render BURST_REGIONS as black/white stripes at the chart frequency.
 
@@ -162,12 +181,19 @@ def _draw_bursts(Y: np.ndarray) -> None:
     stripe period_px = sample_rate / freq_MHz. For burst_vertical and
     wedge_segment, stripes are vertical (frequency along x). For
     burst_diagonal, stripes are rotated by stripe_angle_deg.
+
+    wedge_segment regions are skipped here — they are drawn as a single
+    continuous wedge by _draw_wedge_column so the synth matches the real
+    chart, which has a continuous narrowing pattern rather than discrete
+    fixed-frequency tiles.
     """
     for r in tp_chart.BURST_REGIONS:
         x, y, w, h = r["ideal_box"]
         period = tp_chart.NTSC_SAMPLE_RATE_MHZ / r["frequency_MHz"]
         kind = r["kind"]
-        if kind in ("burst_vertical", "wedge_segment"):
+        if kind == "wedge_segment":
+            continue
+        if kind == "burst_vertical":
             xs = np.arange(w, dtype=np.float32)
             phase = 2.0 * np.pi * xs / period
             row = np.where(
@@ -248,6 +274,7 @@ def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndar
     _draw_grid(Y)
     _draw_tartan(Y, U, V)
     _draw_gray_strip(Y, U, V)
+    _draw_wedge_column(Y)
     _draw_bursts(Y)
     _draw_saturated_chroma_blocks(Y, U, V)
     _draw_chroma_bursts(Y, U, V)

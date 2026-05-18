@@ -263,6 +263,11 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
                        "0-100 score from mean |ΔY| across the 4 IRE steps, "
                        "with an extra penalty for chroma cast on neutral "
                        "patches.")
+        + _sortable_th("Frequency",
+                       "0-100 score combining row-2 burst luma loss + "
+                       "chroma leak, plus the wedge -6 dB cutoff and "
+                       "first chroma-intrusion frequency. Higher = wider "
+                       "luma bandwidth and cleaner Y/C separation.")
         + _sortable_th("Overall",
                        "Mean of the available category scores.")
         + "</tr>"
@@ -273,7 +278,8 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
         g  = _score_geometry(c)
         co = _score_color(c)
         gs = _score_grayscale(c)
-        vals = [v for v in (g, co, gs)
+        fq = _score_frequency(c)
+        vals = [v for v in (g, co, gs, fq)
                 if v is not None and not (isinstance(v, float) and v != v)]
         overall = sum(vals) / len(vals) if vals else float("nan")
         cells = [
@@ -281,6 +287,7 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
             _td_num(g,       "{:.1f}", cls=_score_class(g)),
             _td_num(co,      "{:.1f}", cls=_score_class(co)),
             _td_num(gs,      "{:.1f}", cls=_score_class(gs)),
+            _td_num(fq,      "{:.1f}", cls=_score_class(fq)),
             _td_num(overall, "{:.1f}", cls=_score_class(overall)),
         ]
         rows.append("<tr>" + "".join(cells) + "</tr>")
@@ -831,6 +838,363 @@ def _luma_class(pct) -> str:
     return "delta-bad"
 
 
+# Wedge sample points in the order they appear top-to-bottom on the chart.
+WEDGE_SAMPLE_FREQS = [
+    ("WEDGE_2p0MHz",  "XC_WEDGE_2p0MHz",  2.0),
+    ("WEDGE_2p5MHz",  "XC_WEDGE_2p5MHz",  2.5),
+    ("WEDGE_3MHz",    "XC_WEDGE_3MHz",    3.0),
+    ("WEDGE_3p5MHz",  "XC_WEDGE_3p5MHz",  3.5),
+    ("WEDGE_4MHz",    "XC_WEDGE_4MHz",    4.0),
+    ("WEDGE_4p5MHz",  "XC_WEDGE_4p5MHz",  4.5),
+    ("WEDGE_5MHz",    "XC_WEDGE_5MHz",    5.0),
+]
+
+
+def _wedge_metrics(c: Dict[str, Any]):
+    """Pull luma modulation % + chroma_rms for each wedge sample point.
+
+    Returns list[(freq_MHz, modulation_pct, modulation_db, chroma_rms)],
+    one entry per WEDGE_SAMPLE_FREQS in order. None values where the
+    measurement is missing."""
+    fr_regions  = ((c.get("frequency_response") or {}).get("regions") or {})
+    art_regions = ((c.get("artifacts") or {}).get("regions") or {})
+    out = []
+    for bid, xid, freq in WEDGE_SAMPLE_FREQS:
+        lu = fr_regions.get(bid) or {}
+        xc = art_regions.get(xid) or {}
+        out.append((
+            freq,
+            lu.get("modulation_pct"),
+            lu.get("modulation_db"),
+            xc.get("chroma_rms"),
+        ))
+    return out
+
+
+def _wedge_minus_n_db_freq(curve, threshold_db: float):
+    """Highest frequency where luma modulation >= threshold (db). Linear
+    interpolation between adjacent sample points where the threshold is
+    crossed. Returns None if the response is below threshold from the
+    start, or above threshold all the way through (in which case it
+    returns the last sampled freq)."""
+    last_above = None
+    for freq, _pct, db, _rms in curve:
+        if db is None or db == float("-inf"):
+            continue
+        if db >= threshold_db:
+            last_above = (freq, db)
+        elif last_above is not None:
+            f0, db0 = last_above
+            if db0 == db:
+                return float(f0)
+            ratio = (db0 - threshold_db) / (db0 - db)
+            return float(f0 + ratio * (freq - f0))
+    if last_above is not None:
+        return float(last_above[0])
+    return None
+
+
+def _wedge_first_chroma_freq(curve, rms_threshold: float = 10.0):
+    """Lowest frequency where chroma_rms first exceeds the threshold —
+    indicates where the decoder starts injecting cross-color into the
+    wedge. None if no sample exceeds the threshold."""
+    for freq, _pct, _db, rms in curve:
+        if rms is None:
+            continue
+        if rms >= rms_threshold:
+            return float(freq)
+    return None
+
+
+def _wedge_max_chroma_rms(curve):
+    vals = [rms for _f, _p, _d, rms in curve if rms is not None]
+    return float(max(vals)) if vals else None
+
+
+def _score_frequency(c: Dict[str, Any]) -> float:
+    """0-100 composite frequency score. Penalties cover:
+      - row-2 burst chroma leak (decoder mistakes luma for chroma)
+      - row-2 burst luma loss (decoder kills high-frequency luma)
+      - wedge -6 dB cutoff below 4.0 MHz (low luma bandwidth)
+      - wedge chroma intrusion above 2.5 MHz (cross-color)
+    """
+    pen = 0.0
+    # Row-2 luma + chroma penalties (max ~50 pts).
+    for b in FREQ_BURST_REGIONS:
+        m = _freq_burst_metrics(c, b["id"], b["xc_id"])
+        lu = m["luma_modulation_pct"]
+        xc = m["chroma_leak_rms"]
+        if lu is not None and lu < 30:
+            pen += _clamp((30 - lu) / 30 * 6, 0, 6)
+        if xc is not None and xc > 10:
+            # log-scale because real-world values run 10..500+
+            pen += _clamp((xc - 10) ** 0.5, 0, 8)
+    # Wedge penalties.
+    curve = _wedge_metrics(c)
+    target_minus6 = 4.0
+    f6 = _wedge_minus_n_db_freq(curve, -6.0)
+    if f6 is None:
+        pen += 25
+    elif f6 < target_minus6:
+        pen += _clamp((target_minus6 - f6) * 20, 0, 25)
+    first_chroma = _wedge_first_chroma_freq(curve, rms_threshold=10.0)
+    if first_chroma is not None and first_chroma <= 3.5:
+        # Chroma appearing early in the wedge = bad Y/C separation.
+        pen += _clamp((3.5 - first_chroma + 0.5) * 10, 0, 15)
+    return max(0.0, 100.0 - pen)
+
+
+_SYNTH_WEDGE_DATA_URL = None
+
+
+def _synth_wedge_data_url(upscale: int = 4) -> str:
+    """Render the wedge column from a clean synth once and return it as a
+    base64 PNG data URL. Used as the visual reference at the top of the
+    frequency wedge section."""
+    global _SYNTH_WEDGE_DATA_URL
+    if _SYNTH_WEDGE_DATA_URL is not None:
+        return _SYNTH_WEDGE_DATA_URL
+    try:
+        import base64
+        import cv2
+        bgr = _synth_frame_bgr()
+        w = tp_chart.WEDGE_COLUMN
+        x0, y0 = w["x"], w["y_top"]
+        x1 = x0 + w["width"]; y1 = w["y_bottom"]
+        crop = bgr[y0:y1, x0:x1]
+        if upscale > 1:
+            crop = cv2.resize(
+                crop, (crop.shape[1] * upscale, crop.shape[0] * upscale),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        ok, png = cv2.imencode(".png", crop)
+        if not ok:
+            return ""
+        _SYNTH_WEDGE_DATA_URL = (
+            "data:image/png;base64,"
+            + base64.b64encode(png.tobytes()).decode("ascii")
+        )
+    except Exception:
+        _SYNTH_WEDGE_DATA_URL = ""
+    return _SYNTH_WEDGE_DATA_URL
+
+
+def _capture_wedge_data_url(c: Dict[str, Any]) -> str:
+    """Embed the per-capture wedge crop sidecar PNG that tp_measure
+    writes alongside the JSON. Returns "" if the sidecar isn't there
+    (e.g. older JSON)."""
+    import base64
+    src = c.get("_source_json_path")
+    if not src:
+        return ""
+    stem = os.path.splitext(src)[0]
+    path = stem + "_wedge.png"
+    if not os.path.exists(path):
+        return ""
+    with open(path, "rb") as f:
+        return ("data:image/png;base64,"
+                + base64.b64encode(f.read()).decode("ascii"))
+
+
+def _modulation_class(pct) -> str:
+    """Color class for wedge modulation %. Stricter than the row-2 burst
+    threshold (more sample points, finer gradation)."""
+    if pct is None:
+        return ""
+    if pct >= 50:
+        return "delta-good"
+    if pct >= 20:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def render_frequency_wedge_overview(captures: List[Dict[str, Any]]) -> str:
+    head = (
+        "<tr>"
+        + _sortable_th("Capture",
+                       "Capture file name.", kind="text")
+        + _sortable_th("Luma -6 dB (MHz)",
+                       "Highest frequency in the wedge where luma "
+                       "modulation is still ≥ 50 % of full contrast "
+                       "(−6 dB cut-off). Higher = wider luma bandwidth.")
+        + _sortable_th("Luma -12 dB (MHz)",
+                       "Highest frequency where luma is still ≥ 25 % of "
+                       "full contrast. A useful proxy for the practical "
+                       "resolution limit before bars become noise.")
+        + _sortable_th("First chroma intrusion (MHz)",
+                       "Lowest wedge frequency where chroma_rms ≥ 10. "
+                       "On a clean Y/C-separating decoder this is "
+                       "absent. Lower = decoder starts faking chroma "
+                       "from luma earlier in the wedge.")
+        + _sortable_th("Max chroma leak",
+                       "Largest chroma_rms across the 7 wedge sample "
+                       "points.")
+        + "</tr>"
+    )
+    rows = []
+    for c in captures:
+        name = _basename(c["_meta"]["capture"])
+        curve = _wedge_metrics(c)
+        f6  = _wedge_minus_n_db_freq(curve, -6.0)
+        f12 = _wedge_minus_n_db_freq(curve, -12.0)
+        first_chroma = _wedge_first_chroma_freq(curve)
+        max_chroma   = _wedge_max_chroma_rms(curve)
+        cells = [
+            _td_name(name),
+            _td_num(f6,  "{:.2f}",
+                    cls=("delta-good" if f6  and f6  >= 4.5
+                         else "delta-warn" if f6  and f6  >= 3.5
+                         else "delta-bad")),
+            _td_num(f12, "{:.2f}",
+                    cls=("delta-good" if f12 and f12 >= 5.0
+                         else "delta-warn" if f12 and f12 >= 4.0
+                         else "delta-bad")),
+            _td_num(first_chroma, "{:.2f}",
+                    cls=("delta-bad" if first_chroma and first_chroma <= 2.5
+                         else "delta-warn" if first_chroma and first_chroma <= 3.5
+                         else "delta-good")),
+            _td_num(max_chroma, "{:.1f}", cls=_chroma_class(max_chroma)),
+        ]
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"""
+<section class="overview">
+  <h2>Frequency Wedge Overview</h2>
+  <p class="legend">
+    Headline numbers from the right-column narrowing wedge (1.5 MHz at
+    the top through 5.5 MHz at the bottom). The -6 dB cutoff tells you
+    where the decoder loses half the bar contrast; the first chroma
+    intrusion frequency tells you where Y/C separation starts to fail.
+  </p>
+  <table class="overview-table">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
+def _render_frequency_wedge_panel(c: Dict[str, Any]) -> str:
+    cap_name = _basename(c["_meta"]["capture"])
+    curve = _wedge_metrics(c)
+    rows_html = []
+    for freq, lu_pct, lu_db, xc_rms in curve:
+        mod_cell = ("—" if lu_pct is None
+                    else f"{lu_pct:.1f}%"
+                         + (f" ({lu_db:+.1f} dB)"
+                            if lu_db is not None and lu_db != float("-inf")
+                            else ""))
+        chroma_cell = ("—" if xc_rms is None else f"{xc_rms:.1f}")
+        rows_html.append(
+            f"<tr>"
+            f"<td class='name'>{freq:.1f} MHz</td>"
+            f"<td class='delta {_modulation_class(lu_pct)}'>{mod_cell}</td>"
+            f"<td class='delta {_chroma_class(xc_rms)}'>{chroma_cell}</td>"
+            f"</tr>"
+        )
+    f6  = _wedge_minus_n_db_freq(curve, -6.0)
+    f12 = _wedge_minus_n_db_freq(curve, -12.0)
+    first_chroma = _wedge_first_chroma_freq(curve)
+    summary_html = (
+        "<ul class='geo-list'>"
+        f"<li>Luma <b>-6 dB</b> cutoff: "
+        f"<b>{('not reached' if f6 is None else f'{f6:.2f} MHz')}</b> "
+        f"<span class='muted'>(higher = wider luma bandwidth)</span>.</li>"
+        f"<li>Luma <b>-12 dB</b> cutoff: "
+        f"<b>{('not reached' if f12 is None else f'{f12:.2f} MHz')}</b> "
+        f"<span class='muted'>(point where bars become noise)</span>.</li>"
+        f"<li>First chroma intrusion: "
+        f"<b>{('none' if first_chroma is None else f'{first_chroma:.2f} MHz')}</b> "
+        f"<span class='muted'>(clean Y/C decoders show none)</span>.</li>"
+        "</ul>"
+    )
+    wedge_url = _capture_wedge_data_url(c)
+    if wedge_url:
+        wedge_img = (
+            f"<figure class='wedge-fig'><img src='{wedge_url}' "
+            f"alt='wedge crop'/>"
+            f"<figcaption>Decoded wedge (decoder output, 4× upscaled).</figcaption>"
+            f"</figure>"
+        )
+    else:
+        wedge_img = ("<p class='muted small'>no wedge crop sidecar — "
+                     "re-run tp_measure to generate.</p>")
+    return (
+        f"<div class='color-panel'>"
+        f"<h3>{_h.escape(cap_name)}</h3>"
+        f"<div class='wedge-row'>"
+        f"<div class='wedge-img-col'>{wedge_img}</div>"
+        f"<div class='wedge-table-col'>"
+        f"<table class='color-table'>"
+        f"<tr>{_th('Frequency', 'Local frequency at the sample y-position in the wedge.')}"
+        f"{_th('Luma modulation', 'Peak modulation as a fraction of full contrast.')}"
+        f"{_th('Chroma RMS', 'Chroma deviation from neutral inside the luma-only stripe pattern.')}"
+        f"</tr>"
+        + "".join(rows_html) +
+        f"</table>"
+        f"<h4>Summary</h4>{summary_html}"
+        f"</div></div></div>"
+    )
+
+
+def render_frequency_wedge_section(captures: List[Dict[str, Any]]) -> str:
+    if not any(c.get("frequency_response") for c in captures):
+        return ""
+    intro = """
+<p class="legend">
+  The right side of the chart contains a <b>continuous frequency
+  wedge</b> running top-to-bottom from <b>1.5 MHz</b> down to
+  <b>5.5 MHz</b>. The stripes are pure luma (black/white) and they
+  narrow as you read down — each row's local frequency rises with
+  position. This is the canonical way to <b>see</b> where a decoder
+  hits its bandwidth limit.
+</p>
+<p class="legend">
+  <b>What should happen:</b> on a clean signal path, the stripes stay
+  crisp and high-contrast all the way down. The modulation amplitude
+  rolls off gently (every analog system rolls off eventually), but you
+  can still resolve individual bars at 5 MHz.
+</p>
+<p class="legend">
+  <b>Failure modes to look for:</b>
+  <ul class="legend">
+    <li><b>Mid-grey takeover</b> — the modulation amplitude drops, so
+    bars no longer reach pure black/white. The wedge looks washed out
+    in its lower half. Quantified as the <i>−6 dB cutoff frequency</i>
+    (where the modulation has lost half its contrast).</li>
+    <li><b>Stripes disappear into noise</b> — past the decoder's
+    bandwidth limit the bars degrade to flat grey. Quantified as the
+    <i>−12 dB cutoff</i>.</li>
+    <li><b>Color creep / cross-color</b> — bars that should be pure
+    black-and-white acquire a color tint (often blue/yellow on
+    composite NTSC decoders). The decoder is misclassifying
+    high-frequency luma as chroma. Quantified by chroma RMS at each
+    sample point and surfaced as the
+    <i>first chroma-intrusion frequency</i>.</li>
+    <li><b>Ringing / overshoot</b> — bright/dark fringes at stripe
+    edges. Not a single number on this section yet, but visible in
+    the decoded-wedge crop.</li>
+  </ul>
+</p>
+"""
+    synth_url = _synth_wedge_data_url(upscale=4)
+    synth_block = (
+        f"<figure class='wedge-fig wedge-synth-fig'>"
+        f"<img src='{synth_url}' alt='synth wedge reference'/>"
+        f"<figcaption>Synthetic reference: continuous wedge from "
+        f"1.5 MHz (top) to 5.5 MHz (bottom), 4× upscaled.</figcaption>"
+        f"</figure>" if synth_url else ""
+    )
+    panels = [_render_frequency_wedge_panel(c) for c in captures]
+    return f"""
+<section class="freq-wedge">
+  <h2>Frequency Wedge — narrowing-stripe analysis</h2>
+  {intro}
+  {synth_block}
+  {''.join(panels)}
+</section>
+"""
+
+
 def render_frequency_response_overview(captures: List[Dict[str, Any]]) -> str:
     head = (
         "<tr>"
@@ -896,6 +1260,30 @@ def render_frequency_response_overview(captures: List[Dict[str, Any]]) -> str:
 """
 
 
+def _failure_chips(lu_pct, xc_rms) -> str:
+    """Two-chip failure-mode summary per burst:
+      - LUMA: pass / weak / lost
+      - CHROMA: clean / leak / heavy
+    """
+    if lu_pct is None:
+        luma_chip = ("<span class='clip-chip muted'>luma —</span>")
+    elif lu_pct < 10:
+        luma_chip = ("<span class='clip-chip delta-bad'>luma lost</span>")
+    elif lu_pct < 30:
+        luma_chip = ("<span class='clip-chip delta-warn'>luma weak</span>")
+    else:
+        luma_chip = ("<span class='clip-chip delta-good'>luma pass</span>")
+    if xc_rms is None:
+        chroma_chip = ("<span class='clip-chip muted'>chroma —</span>")
+    elif xc_rms < 10:
+        chroma_chip = ("<span class='clip-chip delta-good'>Y/C clean</span>")
+    elif xc_rms < 100:
+        chroma_chip = ("<span class='clip-chip delta-warn'>chroma leak</span>")
+    else:
+        chroma_chip = ("<span class='clip-chip delta-bad'>heavy cross-color</span>")
+    return f"<div class='clip-chips'>{luma_chip}{chroma_chip}</div>"
+
+
 def _render_freq_burst_panel(c: Dict[str, Any]) -> str:
     cap_name = _basename(c["_meta"]["capture"])
     rows_html = []
@@ -904,6 +1292,7 @@ def _render_freq_burst_panel(c: Dict[str, Any]) -> str:
         lu_pct = m["luma_modulation_pct"]
         lu_db  = m["luma_modulation_db"]
         xc_rms = m["chroma_leak_rms"]
+        chips = _failure_chips(lu_pct, xc_rms)
         verdict = _freq_verdict(lu_pct, xc_rms)
         lu_cell = ("—" if lu_pct is None
                    else f"{lu_pct:.1f}%"
@@ -915,6 +1304,7 @@ def _render_freq_burst_panel(c: Dict[str, Any]) -> str:
             f"<td class='delta {_luma_class(lu_pct)}'>{lu_cell}</td>"
             f"<td class='delta {_chroma_class(xc_rms)}'>"
             f"{'—' if xc_rms is None else f'{xc_rms:.1f}'}</td>"
+            f"<td>{chips}</td>"
             f"<td class='verdict'>{_h.escape(verdict)}</td>"
             f"</tr>"
         )
@@ -925,6 +1315,7 @@ def _render_freq_burst_panel(c: Dict[str, Any]) -> str:
         f"<tr>{_th('Burst', 'Frequency-response test region in row 2 of the chart.')}"
         f"{_th('Luma modulation', 'Peak luma modulation as a fraction of the chart full-contrast swing (black→white = 100%).')}"
         f"{_th('Chroma leak (rms)', 'RMS chroma deviation inside this luma-only burst. Ideally 0 — any nonzero value means the decoder is misclassifying high-frequency luma as chroma (cross-color).')}"
+        f"{_th('Failure modes', 'Per-burst pass/fail tags for the two distinct failure modes on these patterns: luma loss (decoder cuts high-frequency luma) and chroma leak (decoder injects chroma where there should be none).')}"
         f"{_th('Verdict', 'Plain-language summary.')}"
         f"</tr>"
         + "".join(rows_html) +
@@ -1393,6 +1784,14 @@ table.overview-table tbody tr:nth-child(odd) { background: rgba(255,255,255,0.01
 .burst-ref img { display: block; border: 1px solid #2a2e36; image-rendering: pixelated;
     background: #14161a; }
 .burst-ref figcaption { font-size: 11px; color: #b8c0cc; margin-top: 4px; }
+.wedge-row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.wedge-img-col { flex: 0 0 auto; }
+.wedge-table-col { flex: 1 1 320px; min-width: 320px; }
+.wedge-fig { margin: 6px 0; text-align: center; }
+.wedge-fig img { display: block; border: 1px solid #2a2e36; image-rendering: pixelated;
+    background: #14161a; max-height: 540px; }
+.wedge-fig figcaption { font-size: 11px; color: #b8c0cc; margin-top: 4px; max-width: 280px; }
+.wedge-synth-fig { display: inline-block; margin: 0 12px 12px 0; }
 """
 
 
@@ -2116,12 +2515,14 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_tartan_overview(captures)
         + render_grayscale_overview(captures)
         + render_frequency_response_overview(captures)
+        + render_frequency_wedge_overview(captures)
     )
     details = (
         render_geometry_section(captures)
         + render_tartan_panels(captures)
         + render_gray_panels(captures)
         + render_frequency_response_section(captures)
+        + render_frequency_wedge_section(captures)
         + render_luma_scale_analysis(captures)
         + render_artifacts(captures)
         + render_radial_wedge(captures)
