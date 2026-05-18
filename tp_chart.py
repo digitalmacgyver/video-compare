@@ -457,6 +457,49 @@ def wedge_column_freq_at_y(y: float) -> float:
     return w["freq_top"] + t * (w["freq_bottom"] - w["freq_top"])
 
 
+# =====================================================================
+# CHROMA NON-LINEARITY STAIRCASE (cells 9,1 - 9,3)
+# =====================================================================
+#
+# Three magenta boxes at increasing saturation: 33%, 66%, 100%. Each
+# box is full magenta (R=B=N, G=0) so both chroma magnitude AND luma
+# scale linearly with N. Used to measure chroma gain linearity (does
+# chroma scale 1:2:3 as expected?) and differential phase (does the
+# hue stay constant across the three boxes?).
+#
+# Sample windows are 28x18 centered in the 60x54 cells.
+
+_CHROMA_STAIRCASE_RAW = [
+    # (id,       level (0..1), center_xy)
+    ("MAG_33",   1.0 / 3.0,    (30,  459)),
+    ("MAG_66",   2.0 / 3.0,    (90,  459)),
+    ("MAG_100",  1.0,          (150, 459)),
+]
+
+
+def _build_chroma_staircase_regions():
+    out = []
+    for rid, level, (cx, cy) in _CHROMA_STAIRCASE_RAW:
+        r = level
+        g = 0.0
+        b = level
+        y10, u10, v10 = rgb_norm_to_yuv10(r, g, b)
+        out.append({
+            "id":          rid,
+            "level":       float(level),
+            "ideal_rgb":   (r, g, b),
+            "ideal_yuv10": (y10, u10, v10),
+            "center_xy":   (cx, cy),
+            "sample":      {"kind": "center_window",
+                            "size": (28, 18)},
+            "box":         _box_from_center(cx, cy, 28, 18),
+        })
+    return out
+
+
+CHROMA_STAIRCASE_REGIONS = _build_chroma_staircase_regions()
+
+
 BURST_REGIONS = [
     {
         "id":            rid,

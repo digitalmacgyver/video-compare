@@ -602,6 +602,110 @@ def test_render_freq_burst_panel_includes_failure_mode_chips():
     assert "Y/C clean" in html
 
 
+def _make_capture_with_staircase(tag, *, r2=0.998, diff_phase=1.2,
+                                 max_dev_pct=2.5):
+    c = _make_capture_json_with_geometry(tag)
+    c["chroma_staircase"] = {
+        "regions": [
+            {"id": "MAG_33",  "level": 1/3,
+             "ideal_yuv10":   [184.6, 610.9, 637.0],
+             "measured_yuv10":[183.0, 612.0, 640.0],
+             "chroma_magnitude": 164.0, "ideal_chroma_magnitude": 159.4,
+             "chroma_phase_deg": 52.0, "ideal_phase_deg": 51.6,
+             "patch_size_px": [28, 18]},
+            {"id": "MAG_66",  "level": 2/3,
+             "ideal_yuv10":   [305.2, 709.9, 762.1],
+             "measured_yuv10":[300.0, 710.0, 767.0],
+             "chroma_magnitude": 323.0, "ideal_chroma_magnitude": 318.9,
+             "chroma_phase_deg": 52.2, "ideal_phase_deg": 51.6,
+             "patch_size_px": [28, 18]},
+            {"id": "MAG_100", "level": 1.0,
+             "ideal_yuv10":   [425.8, 808.8, 887.1],
+             "measured_yuv10":[422.0, 808.0, 882.0],
+             "chroma_magnitude": 473.6, "ideal_chroma_magnitude": 478.4,
+             "chroma_phase_deg": 51.3, "ideal_phase_deg": 51.6,
+             "patch_size_px": [28, 18]},
+        ],
+        "summary": {
+            "chroma_fit_slope": 460.0,
+            "chroma_fit_intercept": 5.0,
+            "chroma_linearity_r2": r2,
+            "max_step_deviation_pct": max_dev_pct,
+            "step_deviations_pct": [-1.0, +2.5, -1.5],
+            "differential_phase_deg": diff_phase,
+            "phase_steps_deg": [0.0, +0.2, -0.7],
+            "luma_linearity_r2": 0.9995,
+        },
+    }
+    return c
+
+
+def test_chroma_staircase_overview_lists_capture_and_metrics():
+    a = _make_capture_with_staircase("alpha")
+    html = tp_compare.render_chroma_staircase_overview([a])
+    assert "Chroma Non-Linearity Overview" in html
+    assert "Chroma R²" in html
+    assert "Diff phase" in html
+    assert "alpha.mov" in html
+    assert "0.9980" in html  # R²
+    assert "1.20" in html    # diff phase
+
+
+def test_chroma_staircase_panel_shows_per_box_swatches_and_summary():
+    a = _make_capture_with_staircase("alpha")
+    html = tp_compare.render_chroma_staircase_panels([a])
+    assert "Chroma Non-Linearity — per capture" in html
+    # All 3 region ids
+    assert "MAG_33" in html and "MAG_66" in html and "MAG_100" in html
+    # Saturation labels
+    assert "33.3%" in html
+    assert "100.0%" in html
+    # Summary block hits verdict
+    assert "linear" in html
+    # Swatches
+    assert "swatch-inline" in html
+
+
+def test_score_chroma_staircase_clean_signal_high():
+    a = _make_capture_with_staircase("alpha", r2=0.998, diff_phase=1.0,
+                                     max_dev_pct=2.0)
+    score = tp_compare._score_chroma_staircase(a)
+    assert score >= 90, f"clean staircase scored {score}"
+
+
+def test_score_chroma_staircase_phase_drift_lowers():
+    a = _make_capture_with_staircase("alpha", r2=0.99, diff_phase=20.0)
+    score = tp_compare._score_chroma_staircase(a)
+    # 20° differential phase (way past textbook) plus R² shortfall
+    # should land the score in the warn/bad band.
+    assert score < 70, f"phase-drift staircase scored {score}"
+    # Clean comparison: same R², much smaller phase → much higher score.
+    clean = _make_capture_with_staircase("beta", r2=0.99, diff_phase=1.0)
+    assert tp_compare._score_chroma_staircase(clean) - score > 15
+
+
+def test_chroma_staircase_score_in_overall_summary():
+    a = _make_capture_with_staircase("alpha")
+    html = tp_compare.render_overall_summary([a])
+    assert "Chroma Lin" in html
+
+
+def test_measure_chroma_staircase_on_synth_is_linear():
+    """End-to-end: synth → measure_chroma_staircase produces R² close to
+    1 and differential phase near zero."""
+    import tp_synthesize, tp_register, tp_measure
+    Y, U, V = tp_synthesize.synthesize()
+    M = tp_register.register(Y)["affine_matrix"]
+    if M is None:
+        return  # registration may fail in synth-only mode; defensive
+    import numpy as np
+    res = tp_measure.measure_chroma_staircase(Y, U, V, np.asarray(M, dtype=np.float32))
+    s = res["summary"]
+    assert s["chroma_linearity_r2"] > 0.99
+    assert abs(s["differential_phase_deg"]) < 1.5
+    assert s["luma_linearity_r2"] > 0.99
+
+
 def test_render_page_places_registration_summary_in_appendix():
     a = _make_capture_json_with_geometry("alpha")
     b = _make_capture_json_with_geometry("beta")
@@ -639,6 +743,12 @@ TESTS_NO_TMPDIR = [
     test_score_frequency_clean_signal_high_score,
     test_score_frequency_heavy_cross_color_low_score,
     test_render_freq_burst_panel_includes_failure_mode_chips,
+    test_chroma_staircase_overview_lists_capture_and_metrics,
+    test_chroma_staircase_panel_shows_per_box_swatches_and_summary,
+    test_score_chroma_staircase_clean_signal_high,
+    test_score_chroma_staircase_phase_drift_lowers,
+    test_chroma_staircase_score_in_overall_summary,
+    test_measure_chroma_staircase_on_synth_is_linear,
     test_render_page_places_registration_summary_in_appendix,
 ]
 TESTS_TMPDIR = [test_compare_cli_writes_html]

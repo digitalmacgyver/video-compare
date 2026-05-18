@@ -268,6 +268,12 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
                        "chroma leak, plus the wedge -6 dB cutoff and "
                        "first chroma-intrusion frequency. Higher = wider "
                        "luma bandwidth and cleaner Y/C separation.")
+        + _sortable_th("Chroma Lin",
+                       "0-100 score from the magenta saturation "
+                       "staircase. Penalises non-linear chroma gain "
+                       "(33/66/100 % boxes deviating from a linear "
+                       "ramp) and differential phase (hue drifting as "
+                       "saturation rises).")
         + _sortable_th("Overall",
                        "Mean of the available category scores.")
         + "</tr>"
@@ -279,7 +285,8 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
         co = _score_color(c)
         gs = _score_grayscale(c)
         fq = _score_frequency(c)
-        vals = [v for v in (g, co, gs, fq)
+        cl = _score_chroma_staircase(c)
+        vals = [v for v in (g, co, gs, fq, cl)
                 if v is not None and not (isinstance(v, float) and v != v)]
         overall = sum(vals) / len(vals) if vals else float("nan")
         cells = [
@@ -288,6 +295,7 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
             _td_num(co,      "{:.1f}", cls=_score_class(co)),
             _td_num(gs,      "{:.1f}", cls=_score_class(gs)),
             _td_num(fq,      "{:.1f}", cls=_score_class(fq)),
+            _td_num(cl,      "{:.1f}", cls=_score_class(cl)),
             _td_num(overall, "{:.1f}", cls=_score_class(overall)),
         ]
         rows.append("<tr>" + "".join(cells) + "</tr>")
@@ -522,6 +530,247 @@ def render_grayscale_overview(captures: List[Dict[str, Any]]) -> str:
     <thead>{head}</thead>
     <tbody>{''.join(rows)}</tbody>
   </table>
+</section>
+"""
+
+
+# ---------------------------------------------------------------------
+# Chroma non-linearity staircase (3 magenta boxes, 33/66/100%).
+# ---------------------------------------------------------------------
+
+def _chroma_staircase_data(c: Dict[str, Any]):
+    return c.get("chroma_staircase") or {}
+
+
+def _score_chroma_staircase(c: Dict[str, Any]) -> float:
+    """0-100. Penalises non-linear chroma scaling + phase wander."""
+    cs = _chroma_staircase_data(c)
+    s = cs.get("summary") or {}
+    r2  = s.get("chroma_linearity_r2")
+    dpd = s.get("differential_phase_deg")
+    if r2 is None or (isinstance(r2, float) and r2 != r2):
+        return float("nan")
+    if dpd is None or (isinstance(dpd, float) and dpd != dpd):
+        dpd = 0.0
+    pen = _clamp((1.0 - r2) * 200, 0, 60) + _clamp(abs(dpd) * 4, 0, 40)
+    return max(0.0, 100.0 - pen)
+
+
+def _r2_class(r2) -> str:
+    if r2 is None:
+        return ""
+    if r2 >= 0.99:
+        return "delta-good"
+    if r2 >= 0.95:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def _phase_class(deg) -> str:
+    if deg is None:
+        return ""
+    d = abs(deg)
+    if d < 3:
+        return "delta-good"
+    if d < 10:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def _step_dev_class(pct) -> str:
+    if pct is None:
+        return ""
+    d = abs(pct)
+    if d < 3:
+        return "delta-good"
+    if d < 8:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def render_chroma_staircase_overview(captures: List[Dict[str, Any]]) -> str:
+    head = (
+        "<tr>"
+        + _sortable_th("Capture",
+                       "Capture file name.", kind="text")
+        + _sortable_th("Chroma R²",
+                       "Linear-fit R² for chroma magnitude vs intended "
+                       "level (33/66/100 %). 1.000 = perfectly linear; "
+                       "&lt;0.99 = visible non-linearity in chroma gain.")
+        + _sortable_th("Max step Δ %",
+                       "Largest deviation of any of the 3 boxes from the "
+                       "best-fit linear ramp, as a percent of the 100% "
+                       "chroma magnitude. Lower = better.")
+        + _sortable_th("Diff phase (°)",
+                       "Max − min chroma phase across the 3 boxes. The "
+                       "magenta hue should stay constant as saturation "
+                       "rises; nonzero = differential phase error.")
+        + _sortable_th("Luma R²",
+                       "Linear-fit R² on the staircase luma. The boxes "
+                       "are full magenta (R=B=N) so luma also scales "
+                       "linearly with N; non-linearity here points at a "
+                       "compressed gamma curve in the dark region.")
+        + "</tr>"
+    )
+    rows = []
+    for c in captures:
+        name = _basename(c["_meta"]["capture"])
+        s = (_chroma_staircase_data(c).get("summary") or {})
+        r2 = s.get("chroma_linearity_r2")
+        max_dev = s.get("max_step_deviation_pct")
+        diff_phase = s.get("differential_phase_deg")
+        y_r2 = s.get("luma_linearity_r2")
+        cells = [
+            _td_name(name),
+            _td_num(r2,         "{:.4f}", cls=_r2_class(r2)),
+            _td_num(max_dev,    "{:.2f}", cls=_step_dev_class(max_dev)),
+            _td_num(diff_phase, "{:.2f}", cls=_phase_class(diff_phase)),
+            _td_num(y_r2,       "{:.4f}", cls=_r2_class(y_r2)),
+        ]
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"""
+<section class="overview">
+  <h2>Chroma Non-Linearity Overview</h2>
+  <p class="legend">
+    Per-capture summary from the 3 magenta saturation boxes at the
+    bottom-left of the chart (33 % → 66 % → 100 %). Chroma R² tells you
+    how linearly the decoder reproduces increasing saturation;
+    differential phase tells you whether the magenta hue stays put as
+    saturation rises (a classic NTSC failure mode).
+  </p>
+  <table class="overview-table">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
+def _render_chroma_staircase_panel(c: Dict[str, Any]) -> str:
+    cap_name = _basename(c["_meta"]["capture"])
+    cs = _chroma_staircase_data(c)
+    regions = cs.get("regions") or []
+    summary = cs.get("summary") or {}
+    if not regions:
+        return (f"<div class='color-panel'><h3>{_h.escape(cap_name)}</h3>"
+                f"<p class='muted'>no chroma staircase data — re-run "
+                f"tp_measure.</p></div>")
+    rows_html = []
+    step_devs = summary.get("step_deviations_pct") or []
+    phase_steps = summary.get("phase_steps_deg") or []
+    for i, r in enumerate(regions):
+        rid = r["id"]
+        lvl_pct = r["level"] * 100.0
+        i_y10, i_u10, i_v10 = r["ideal_yuv10"]
+        m_y10, m_u10, m_v10 = r["measured_yuv10"]
+        ideal_rgb = tp_chart.yuv10_to_rgb8(i_y10, i_u10, i_v10)
+        meas_rgb  = tp_chart.yuv10_to_rgb8(m_y10, m_u10, m_v10)
+        chroma_mag = r["chroma_magnitude"]
+        ideal_mag  = r["ideal_chroma_magnitude"]
+        phase_deg  = r["chroma_phase_deg"]
+        step_dev = step_devs[i] if i < len(step_devs) else None
+        phase_step = phase_steps[i] if i < len(phase_steps) else None
+        phase_cell = (
+            f"{phase_deg:.2f}°"
+            + (f" <span class='muted small'>(Δ {phase_step:+.2f}°)</span>"
+               if phase_step is not None else "")
+        )
+        rows_html.append(
+            f"<tr>"
+            f"<td class='name'>{rid}</td>"
+            f"<td class='muted small'>{lvl_pct:.1f}%</td>"
+            f"<td class='swatch-cell'>{_swatch_inline(ideal_rgb, 'ideal')}</td>"
+            f"<td class='swatch-cell'>{_swatch_inline(meas_rgb, 'measured')}</td>"
+            f"<td class='delta'>{chroma_mag:.0f} "
+            f"<span class='muted small'>(ideal {ideal_mag:.0f})</span></td>"
+            f"<td class='delta {_phase_class(phase_step)}'>{phase_cell}</td>"
+            f"<td class='delta {_step_dev_class(step_dev)}'>"
+            f"{('—' if step_dev is None else f'{step_dev:+.2f}%')}</td>"
+            f"</tr>"
+        )
+    body = "".join(rows_html)
+
+    r2  = summary.get("chroma_linearity_r2")
+    dpd = summary.get("differential_phase_deg")
+    slope = summary.get("chroma_fit_slope")
+    intercept = summary.get("chroma_fit_intercept")
+    y_r2 = summary.get("luma_linearity_r2")
+
+    def _verdict_lin(r2):
+        if r2 is None: return "—"
+        if r2 >= 0.99:  return "linear"
+        if r2 >= 0.95:  return "slight non-linearity"
+        return "non-linear"
+    def _verdict_phase(d):
+        if d is None: return "—"
+        if abs(d) < 3:   return "phase stable"
+        if abs(d) < 10:  return "mild phase shift"
+        return "differential phase error"
+
+    summary_html = (
+        "<ul class='geo-list'>"
+        f"<li>Chroma linearity: <b>R² = "
+        f"{('—' if r2 is None else f'{r2:.4f}')}</b> — "
+        f"<span class='{_r2_class(r2)}'>{_h.escape(_verdict_lin(r2))}</span>. "
+        f"<span class='muted'>slope {('—' if slope is None else f'{slope:.1f}')} "
+        f"chroma codes/level, intercept {('—' if intercept is None else f'{intercept:+.1f}')}</span>.</li>"
+        f"<li>Differential phase: <b>"
+        f"{('—' if dpd is None else f'{dpd:.2f}°')}</b> — "
+        f"<span class='{_phase_class(dpd)}'>{_h.escape(_verdict_phase(dpd))}</span>.</li>"
+        f"<li>Luma linearity: <b>R² = "
+        f"{('—' if y_r2 is None else f'{y_r2:.4f}')}</b> "
+        f"<span class='muted'>(staircase luma should also scale linearly "
+        f"with level).</span></li>"
+        "</ul>"
+    )
+
+    return (
+        f"<div class='color-panel'>"
+        f"<h3>{_h.escape(cap_name)}</h3>"
+        f"<table class='color-table'>"
+        f"<tr>{_th('ID', 'Region code.')}"
+        f"{_th('Level', 'Intended chroma saturation (33 / 66 / 100 %).')}"
+        f"{_th('Ref', 'Ideal swatch for full magenta at this saturation.')}"
+        f"{_th('Cap', 'Measured swatch from the capture.')}"
+        f"{_th('Chroma mag', 'Measured chroma magnitude in 10-bit codes (√(ΔU² + ΔV²)).')}"
+        f"{_th('Phase', 'Measured chroma phase angle. Δ shows the shift relative to the 33% box.')}"
+        f"{_th('Step Δ', 'Deviation from best-fit linear ramp, as a percent of the 100% chroma magnitude.')}"
+        f"</tr>"
+        + body +
+        f"</table>"
+        f"<h4>Summary</h4>{summary_html}"
+        f"</div>"
+    )
+
+
+def render_chroma_staircase_panels(captures: List[Dict[str, Any]]) -> str:
+    if not any(c.get("chroma_staircase") for c in captures):
+        return ""
+    panels = [_render_chroma_staircase_panel(c) for c in captures]
+    intro = """
+<p class="legend">
+  Three boxes of full-saturation <b>magenta</b> rendered at 33.3 %,
+  66.7 %, and 100 % chroma at the bottom-left of the chart. The
+  staircase is designed to test two related artifacts:
+  <ul class="legend">
+    <li><b>Chroma non-linearity (differential gain)</b> — the decoder
+    should reproduce chroma magnitude linearly: doubling the intended
+    saturation should double the measured chroma. A non-linear curve
+    means saturated colors are compressed or expanded relative to
+    pastel colors.</li>
+    <li><b>Differential phase</b> — the hue (chroma phase angle)
+    should stay constant across all three boxes. A drift in phase as
+    saturation rises is the classic NTSC differential-phase error and
+    shows up as a hue shift between dark and bright versions of the
+    same color.</li>
+  </ul>
+</p>
+"""
+    return f"""
+<section class="chroma-staircase-panels">
+  <h2>Chroma Non-Linearity — per capture</h2>
+  {intro}
+  {''.join(panels)}
 </section>
 """
 
@@ -2516,6 +2765,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_grayscale_overview(captures)
         + render_frequency_response_overview(captures)
         + render_frequency_wedge_overview(captures)
+        + render_chroma_staircase_overview(captures)
     )
     details = (
         render_geometry_section(captures)
@@ -2523,6 +2773,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_gray_panels(captures)
         + render_frequency_response_section(captures)
         + render_frequency_wedge_section(captures)
+        + render_chroma_staircase_panels(captures)
         + render_luma_scale_analysis(captures)
         + render_artifacts(captures)
         + render_radial_wedge(captures)

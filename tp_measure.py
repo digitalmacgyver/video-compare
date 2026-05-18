@@ -372,6 +372,130 @@ def _compute_geometry_quality(geom, final):
     return "failed", f"mean residual {mean_res:.2f} px above 2.0 px warn threshold"
 
 
+def _sample_box_yuv(Y, U, V, region, affine):
+    """Sample a single staircase box (no expected/sat_pct logic — those
+    are derived later from the linear-fit). Returns
+    (mean_Y10, mean_U10, mean_V10, patch_size_px)."""
+    import math
+    x, y, w, h = region["box"]
+    cx, cy = x + w / 2.0, y + h / 2.0
+    cx_cap, cy_cap = _apply_affine(affine, cx, cy)
+    half_w = max(2, w // 2)
+    half_h = max(2, h // 2)
+    x0 = max(0, int(round(cx_cap)) - half_w)
+    x1 = min(Y.shape[1], int(round(cx_cap)) + half_w)
+    y0 = max(0, int(round(cy_cap)) - half_h)
+    y1 = min(Y.shape[0], int(round(cy_cap)) + half_h)
+    yp = Y[y0:y1, x0:x1].astype(np.float64)
+    cx0, cx1 = x0 // 2, max(x0 // 2 + 1, x1 // 2)
+    up = U[y0:y1, cx0:cx1].astype(np.float64)
+    vp = V[y0:y1, cx0:cx1].astype(np.float64)
+    return (
+        float(yp.mean()) if yp.size else float("nan"),
+        float(up.mean()) if up.size else float("nan"),
+        float(vp.mean()) if vp.size else float("nan"),
+        [x1 - x0, y1 - y0],
+    )
+
+
+def measure_chroma_staircase(Y, U, V, affine) -> Dict[str, Any]:
+    """Sample the three magenta staircase boxes (33/66/100% magenta)
+    and compute the chroma non-linearity + differential phase metrics.
+
+    Returns a dict shaped for tp_compare to consume:
+
+        regions: per-box mean YUV, chroma magnitude/phase, ideal vs
+                 measured, phase delta vs the lowest-level box.
+        summary: linear-fit slope/intercept/R^2 on chroma magnitude
+                 vs intended level, max step deviation in %, and
+                 differential phase = max - min phase across boxes
+                 (degrees).
+    """
+    import math
+    regions_out = []
+    levels, mags, phases = [], [], []
+    ys, us, vs = [], [], []
+    for r in tp_chart.CHROMA_STAIRCASE_REGIONS:
+        y10, u10, v10, patch_px = _sample_box_yuv(Y, U, V, r, affine)
+        du = u10 - tp_chart.CHROMA_CENTER
+        dv = v10 - tp_chart.CHROMA_CENTER
+        chroma_mag = float((du * du + dv * dv) ** 0.5)
+        phase_deg = float(math.degrees(math.atan2(dv, du)))
+        ideal_y10, ideal_u10, ideal_v10 = r["ideal_yuv10"]
+        ideal_du = ideal_u10 - tp_chart.CHROMA_CENTER
+        ideal_dv = ideal_v10 - tp_chart.CHROMA_CENTER
+        ideal_mag = float((ideal_du * ideal_du + ideal_dv * ideal_dv) ** 0.5)
+        ideal_phase = float(math.degrees(math.atan2(ideal_dv, ideal_du)))
+        regions_out.append({
+            "id":            r["id"],
+            "level":         r["level"],
+            "ideal_yuv10":   [ideal_y10, ideal_u10, ideal_v10],
+            "measured_yuv10":[y10, u10, v10],
+            "chroma_magnitude":       chroma_mag,
+            "ideal_chroma_magnitude": ideal_mag,
+            "chroma_phase_deg":       phase_deg,
+            "ideal_phase_deg":        ideal_phase,
+            "patch_size_px":          patch_px,
+        })
+        levels.append(r["level"])
+        mags.append(chroma_mag)
+        phases.append(phase_deg)
+        ys.append(y10); us.append(u10); vs.append(v10)
+
+    # Linear fit: chroma_magnitude = slope * level + intercept.
+    levels_arr = np.asarray(levels, dtype=np.float64)
+    mags_arr   = np.asarray(mags,   dtype=np.float64)
+    n = len(levels)
+    if n >= 2:
+        slope, intercept = np.polyfit(levels_arr, mags_arr, 1)
+        pred = slope * levels_arr + intercept
+        ss_res = float(((mags_arr - pred) ** 2).sum())
+        ss_tot = float(((mags_arr - mags_arr.mean()) ** 2).sum())
+        r_squared = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+        # Per-step deviation as % of full-scale chroma magnitude.
+        full_scale = float(slope)  # 100% box predicted chroma = slope + intercept ≈ slope
+        deviations = [(float(m - p) / full_scale * 100.0
+                       if full_scale > 1e-6 else float("nan"))
+                      for m, p in zip(mags_arr, pred)]
+        max_dev_pct = float(max(abs(d) for d in deviations
+                                if not (d != d)))  # skip NaN
+    else:
+        slope = intercept = r_squared = float("nan")
+        deviations = []
+        max_dev_pct = float("nan")
+
+    diff_phase = float(max(phases) - min(phases)) if phases else float("nan")
+    # Also surface the per-step phase delta vs the first box (33%).
+    phase_step_deg = [float(p - phases[0]) for p in phases] if phases else []
+
+    # Linear fit on luma — does the staircase preserve linear luma
+    # ramping? (Y - BLACK_Y10) should scale with level too.
+    ys_arr = np.asarray(ys, dtype=np.float64)
+    lum_above_black = ys_arr - tp_chart.BLACK_Y10
+    if n >= 2:
+        y_slope, y_int = np.polyfit(levels_arr, lum_above_black, 1)
+        y_pred = y_slope * levels_arr + y_int
+        ss_res_y = float(((lum_above_black - y_pred) ** 2).sum())
+        ss_tot_y = float(((lum_above_black - lum_above_black.mean()) ** 2).sum())
+        y_r2 = float(1.0 - ss_res_y / ss_tot_y) if ss_tot_y > 0 else float("nan")
+    else:
+        y_r2 = float("nan")
+
+    return {
+        "regions": regions_out,
+        "summary": {
+            "chroma_fit_slope":     float(slope),
+            "chroma_fit_intercept": float(intercept),
+            "chroma_linearity_r2":  r_squared,
+            "max_step_deviation_pct": max_dev_pct,
+            "step_deviations_pct":  [float(d) for d in deviations],
+            "differential_phase_deg": diff_phase,
+            "phase_steps_deg":      phase_step_deg,
+            "luma_linearity_r2":    y_r2,
+        },
+    }
+
+
 def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
     Y, U, V, meta = extract_frame(capture_path, frame_index)
     Y_p, U_p, V_p, padding = pad_to_486(Y, U, V)
@@ -427,6 +551,7 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
 
     geometry_block = _build_geometry_block(reg_full)
     stage3 = _measure_stage3(Y_p, U_p, V_p, M, reg["quality_flag"])
+    chroma_staircase = measure_chroma_staircase(Y_p, U_p, V_p, M)
 
     return {
         "_meta": meta,
@@ -437,6 +562,7 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
         "frequency_response": stage3["frequency_response"],
         "artifacts":          stage3["artifacts"],
         "decoder_class":      stage3["decoder_class"],
+        "chroma_staircase":   chroma_staircase,
     }
 
 
