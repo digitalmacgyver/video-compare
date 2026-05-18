@@ -539,6 +539,37 @@ _PULSE_RAW = [
 ]
 
 
+# =====================================================================
+# RADIAL WEDGE (cell 8,11) — Siemens-star-style resolution probe
+# =====================================================================
+#
+# A circular pattern of N black/white wedge pairs radiating from the
+# cell center. The cell is 60×54 px and the wedge fills most of it.
+# Operator calibration on the snellhd SDI capture located the wedge
+# center at (627, 404) in chart-spec coords, with the wedge active
+# out to radius ≈ 18 px.
+#
+# The local spatial frequency at radius r is N/(2πr) cycles per pixel.
+# Converting to TV-lines using TVL = N * picture_height / (π * r),
+# the chart's wedge expresses ≈ 495 TVL at r = 5 px (the chart's
+# advertised "up to 450 TVL" maximum), dropping to ≈ 155 TVL at the
+# outer rim. Going inward past r ≈ 5 the wedges become smaller than
+# one pixel of period and any modulation we measure is alias /
+# noise — that radius is the chart's intrinsic detail limit.
+
+RADIAL_WEDGE = {
+    "id":             "RADIAL_WEDGE",
+    "cell_box":       (600, 378, 60, 54),     # cell (8,11)
+    "center_xy":      (627, 404),             # operator-derived
+    "inner_radius_px": 2.0,
+    "outer_radius_px": 17.0,
+    "n_wedge_pairs":   16,                    # FFT-derived from real captures
+    # Sampling box used for cross-color and H/V symmetry (kept as-is
+    # from ARTIFACT_REGIONS so existing measurements continue to work).
+    "sample_box":     (604, 384, 52, 44),
+}
+
+
 PULSE_REGIONS = [
     {
         "id":              rid,

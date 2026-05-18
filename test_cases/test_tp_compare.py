@@ -845,6 +845,111 @@ def test_measure_pulse_response_on_synth_is_clean():
     assert abs(s["wog_ringing_pct"] or 0.0) < 5.0
 
 
+def _make_capture_with_radial_wedge(tag, *, tvl=380.0, cc=1.0,
+                                    hv=1.05, n=16):
+    c = _make_capture_json_with_geometry(tag)
+    curve = [
+        {"radius_px": float(r), "modulation_std": float(mod),
+         "fft_peak_bin": int(peak), "fft_peak_amp": float(amp)}
+        for r, mod, peak, amp in [
+            (2, 35.0, 6, 28),
+            (3, 65.0, 8, 50),
+            (4, 115.0, 10, 90),
+            (5, 130.0, 11, 120),
+            (6, 165.0, 12, 170),
+            (7, 175.0, 13, 175),
+            (8, 185.0, 14, 175),
+            (9, 200.0, 14, 180),
+            (10, 215.0, 15, 200),
+            (12, 230.0, 16, 200),
+            (15, 260.0, 16, 175),
+            (17, 270.0, 16, 125),
+        ]
+    ]
+    c["radial_wedge"] = {
+        "center_xy_capture": [627.0, 404.0],
+        "radial_modulation_curve": curve,
+        "n_wedge_pairs_detected": n,
+        "resolution_limit": {
+            "radius_px": 8.0, "tvl": tvl,
+            "modulation_at_limit": 180.0, "threshold_pct": 50.0,
+        },
+        "cross_color_chroma_rms": cc,
+        "h_modulation_std": 200.0,
+        "v_modulation_std": 200.0 / hv,
+        "hv_ratio": hv,
+    }
+    return c
+
+
+def test_radial_wedge_overview_lists_capture_and_metrics():
+    a = _make_capture_with_radial_wedge("alpha", tvl=380, cc=1.0, hv=1.05)
+    html = tp_compare.render_radial_wedge_overview([a])
+    assert "Radial Wedge Overview" in html
+    assert "Resolution limit (TVL)" in html
+    assert "alpha.mov" in html
+    assert "380" in html
+    assert "1.05" in html
+
+
+def test_radial_wedge_panel_shows_summary_and_modulation_table():
+    a = _make_capture_with_radial_wedge("alpha", tvl=380, cc=1.0, hv=1.05)
+    html = tp_compare.render_radial_wedge_panels([a])
+    assert "Radial Wedge — resolution" in html
+    assert "alpha.mov" in html
+    # Mention of resolution limit
+    assert "TVL" in html
+    # Per-radius modulation table cells
+    assert "FFT peak" in html
+    # Verdict pieces
+    assert "clean" in html or "balanced" in html
+    # Aperture asymmetry phrasing
+    assert "aperture" in html
+
+
+def test_score_radial_wedge_clean_signal_high():
+    a = _make_capture_with_radial_wedge("alpha", tvl=400, cc=1.0, hv=1.02)
+    score = tp_compare._score_radial_wedge(a)
+    assert score >= 90, f"clean wedge scored {score}"
+
+
+def test_score_radial_wedge_low_resolution_lowers():
+    a_clean = _make_capture_with_radial_wedge("alpha", tvl=400)
+    a_blur  = _make_capture_with_radial_wedge("beta",  tvl=250)
+    assert tp_compare._score_radial_wedge(a_clean) - \
+           tp_compare._score_radial_wedge(a_blur) > 25
+
+
+def test_score_radial_wedge_cross_color_lowers():
+    a_clean = _make_capture_with_radial_wedge("alpha", cc=2.0)
+    a_xc    = _make_capture_with_radial_wedge("beta",  cc=130.0)
+    assert tp_compare._score_radial_wedge(a_clean) - \
+           tp_compare._score_radial_wedge(a_xc) >= 25
+
+
+def test_overall_summary_includes_wedge_column():
+    a = _make_capture_with_radial_wedge("alpha")
+    html = tp_compare.render_overall_summary([a])
+    assert ">Wedge<" in html
+
+
+def test_measure_radial_wedge_on_synth_resolves_pattern():
+    """Synth radial wedge → measurement detects ~16 pairs and finds a
+    finite resolution limit."""
+    import tp_synthesize, tp_register, tp_measure
+    Y, U, V = tp_synthesize.synthesize()
+    M = tp_register.register(Y)["affine_matrix"]
+    if M is None:
+        return
+    import numpy as np
+    res = tp_measure.measure_radial_wedge(
+        Y, U, V, np.asarray(M, dtype=np.float32))
+    n = res["n_wedge_pairs_detected"]
+    assert n is not None and 12 <= n <= 20, n
+    rl = res["resolution_limit"]
+    assert rl["tvl"] is not None and rl["tvl"] > 200, rl
+
+
 def test_render_page_places_registration_summary_in_appendix():
     a = _make_capture_json_with_geometry("alpha")
     b = _make_capture_json_with_geometry("beta")
@@ -896,6 +1001,13 @@ TESTS_NO_TMPDIR = [
     test_score_pulse_clip_present_lowers,
     test_overall_summary_includes_pulse_column,
     test_measure_pulse_response_on_synth_is_clean,
+    test_radial_wedge_overview_lists_capture_and_metrics,
+    test_radial_wedge_panel_shows_summary_and_modulation_table,
+    test_score_radial_wedge_clean_signal_high,
+    test_score_radial_wedge_low_resolution_lowers,
+    test_score_radial_wedge_cross_color_lowers,
+    test_overall_summary_includes_wedge_column,
+    test_measure_radial_wedge_on_synth_resolves_pattern,
     test_render_page_places_registration_summary_in_appendix,
 ]
 TESTS_TMPDIR = [test_compare_cli_writes_html]

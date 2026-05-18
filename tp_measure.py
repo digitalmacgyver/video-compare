@@ -690,6 +690,154 @@ def _measure_one_pulse(Y, region, affine):
     }
 
 
+def _radial_modulation_curve(Y, cx_cap, cy_cap, r_inner, r_outer,
+                             n_pairs_hint):
+    """Sample concentric circles around (cx_cap, cy_cap) and return the
+    angular-modulation curve plus a per-radius FFT peak frequency.
+
+    For each integer radius from r_inner to r_outer:
+      * Sample 128 evenly-spaced points along the circle (linear interp).
+      * Subtract DC; FFT.
+      * Modulation amplitude = std of the samples.
+      * Peak frequency = bin index with max FFT magnitude within
+        [1, 2*n_pairs_hint]. This catches both the chart's intended
+        angular frequency and any aliased low-bin neighbours.
+    """
+    import scipy.ndimage as ndi
+    H, W = Y.shape
+    n_samples = 128
+    radii, mods, peaks, peak_mags = [], [], [], []
+    for r in range(int(r_inner), int(r_outer) + 1):
+        thetas = np.linspace(0, 2.0 * np.pi, n_samples, endpoint=False)
+        xs = cx_cap + r * np.cos(thetas)
+        ys = cy_cap + r * np.sin(thetas)
+        if (xs.min() < 0.5 or xs.max() >= W - 0.5
+                or ys.min() < 0.5 or ys.max() >= H - 0.5):
+            continue
+        samples = ndi.map_coordinates(
+            Y.astype(np.float64), [ys, xs], order=1, mode="nearest"
+        )
+        mod = float(samples.std())
+        fft = np.fft.rfft(samples - samples.mean())
+        mags = np.abs(fft) * 2.0 / n_samples
+        # Look in a band centered on the hinted N (twice the hint
+        # gives us room for aliasing or wider patterns).
+        upper = min(len(mags) - 1, int(2 * n_pairs_hint))
+        peak_idx = int(np.argmax(mags[1:upper + 1])) + 1
+        peak_mag = float(mags[peak_idx])
+        radii.append(float(r))
+        mods.append(mod)
+        peaks.append(int(peak_idx))
+        peak_mags.append(peak_mag)
+    return radii, mods, peaks, peak_mags
+
+
+def measure_radial_wedge(Y, U, V, affine) -> Dict[str, Any]:
+    """Sample the radial wedge in cell (8,11) and compute the resolution
+    limit, the angular wedge count N, plus aggregate cross-color and
+    H/V symmetry numbers (the same data tp_artifacts surfaces, copied
+    here so a single radial_wedge JSON block has everything).
+    """
+    import math
+    rw = tp_chart.RADIAL_WEDGE
+    cx, cy = rw["center_xy"]
+    cx_cap, cy_cap = _apply_affine(affine, cx, cy)
+    H, W = Y.shape
+
+    # Angular modulation profile.
+    radii, mods, peaks, peak_mags = _radial_modulation_curve(
+        Y, cx_cap, cy_cap,
+        r_inner=rw["inner_radius_px"],
+        r_outer=rw["outer_radius_px"],
+        n_pairs_hint=rw["n_wedge_pairs"],
+    )
+    n_wedge_pairs_detected = None
+    if peaks:
+        # Use peaks from the outer half of the profile — those are above
+        # any aliasing and reveal the chart's intended N most cleanly.
+        outer_peaks = peaks[len(peaks) // 2:]
+        if outer_peaks:
+            counts = {}
+            for p in outer_peaks:
+                counts[p] = counts.get(p, 0) + 1
+            n_wedge_pairs_detected = int(
+                max(counts.keys(), key=lambda k: counts[k])
+            )
+
+    # Resolution limit: the smallest radius where modulation is still
+    # ≥ threshold * max(modulation). Threshold 0.5 = the standard
+    # "half-amplitude" definition of resolved.
+    threshold_pct = 0.5
+    res_limit_r = None
+    res_limit_tvl = None
+    res_limit_mod = None
+    if mods:
+        peak_mod = max(mods)
+        thresh = peak_mod * threshold_pct
+        # Walk inward from the outer radius; the first time modulation
+        # drops below threshold marks the resolution limit.
+        for r, m in zip(radii, mods):
+            if m >= thresh:
+                res_limit_r = r
+                res_limit_mod = m
+                break
+        if res_limit_r is not None and n_wedge_pairs_detected is not None:
+            # Local TVL = N * picture_height / (π * r). Picture height
+            # is the NTSC active raster (486).
+            res_limit_tvl = float(
+                n_wedge_pairs_detected * 486.0
+                / (math.pi * float(res_limit_r))
+            )
+
+    # Cross-color (chroma RMS over the wedge box) — same number
+    # tp_artifacts produces; recomputed here so this block is self-
+    # contained and survives even if artifacts is missing.
+    sx, sy, sw, sh = rw["sample_box"]
+    sx0 = max(0, int(round(sx))); sy0 = max(0, int(round(sy)))
+    sx1 = min(W, sx0 + sw);       sy1 = min(H, sy0 + sh)
+    chroma_rms = None
+    if sx1 > sx0 and sy1 > sy0:
+        ux0 = sx0 // 2; ux1 = max(ux0 + 1, sx1 // 2)
+        u_win = U[sy0:sy1, ux0:ux1].astype(np.float32)
+        v_win = V[sy0:sy1, ux0:ux1].astype(np.float32)
+        du = u_win - tp_chart.CHROMA_CENTER
+        dv = v_win - tp_chart.CHROMA_CENTER
+        chroma_rms = float(np.sqrt((du * du + dv * dv).mean()))
+
+    # H/V modulation symmetry through wedge center.
+    h_std = v_std = hv_ratio = None
+    cy_i = int(round(cy_cap)); cx_i = int(round(cx_cap))
+    if 0 <= cy_i < H and 0 <= cx_i < W and sx1 > sx0 and sy1 > sy0:
+        h_line = Y[cy_i, sx0:sx1].astype(np.float32)
+        v_line = Y[sy0:sy1, cx_i].astype(np.float32)
+        h_line = h_line - h_line.mean()
+        v_line = v_line - v_line.mean()
+        h_std = float(h_line.std())
+        v_std = float(v_line.std())
+        if v_std > 1e-6:
+            hv_ratio = float(h_std / v_std)
+
+    return {
+        "center_xy_capture":      [float(cx_cap), float(cy_cap)],
+        "radial_modulation_curve": [
+            {"radius_px": float(r), "modulation_std": float(m),
+             "fft_peak_bin": int(p), "fft_peak_amp": float(a)}
+            for r, m, p, a in zip(radii, mods, peaks, peak_mags)
+        ],
+        "n_wedge_pairs_detected": n_wedge_pairs_detected,
+        "resolution_limit": {
+            "radius_px":     res_limit_r,
+            "tvl":           res_limit_tvl,
+            "modulation_at_limit": res_limit_mod,
+            "threshold_pct": threshold_pct * 100,
+        },
+        "cross_color_chroma_rms": chroma_rms,
+        "h_modulation_std":       h_std,
+        "v_modulation_std":       v_std,
+        "hv_ratio":               hv_ratio,
+    }
+
+
 def measure_pulse_response(Y, U, V, affine) -> Dict[str, Any]:
     """Sample the three 2T pulse cells (white-on-black, black-on-white,
     white-on-grey) and return per-cell amplitude, FWHM, ringing, echo,
@@ -783,6 +931,7 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
     stage3 = _measure_stage3(Y_p, U_p, V_p, M, reg["quality_flag"])
     chroma_staircase = measure_chroma_staircase(Y_p, U_p, V_p, M)
     pulse_response = measure_pulse_response(Y_p, U_p, V_p, M)
+    radial_wedge = measure_radial_wedge(Y_p, U_p, V_p, M)
 
     return {
         "_meta": meta,
@@ -795,6 +944,7 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
         "decoder_class":      stage3["decoder_class"],
         "chroma_staircase":   chroma_staircase,
         "pulse_response":     pulse_response,
+        "radial_wedge":       radial_wedge,
     }
 
 
@@ -873,6 +1023,15 @@ def _main():
             print(f"wrote {wedge_path} ({wedge_bgr.shape[1]}x{wedge_bgr.shape[0]})")
         except Exception as e:
             print(f"WARNING: wedge-crops PNG generation failed: {e}", file=sys.stderr)
+        try:
+            import tp_radial_wedge_crops
+            import cv2
+            rw_bgr = tp_radial_wedge_crops.build(args.capture, args.output, args.frame)
+            rw_path = stem + "_radial_wedge.png"
+            cv2.imwrite(rw_path, rw_bgr)
+            print(f"wrote {rw_path} ({rw_bgr.shape[1]}x{rw_bgr.shape[0]})")
+        except Exception as e:
+            print(f"WARNING: radial-wedge-crops PNG generation failed: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

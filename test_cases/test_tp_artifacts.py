@@ -59,15 +59,17 @@ def test_summary_keys_present():
         assert key in s, f"missing summary key: {key}"
 
 
-def test_wedge_hv_symmetry_baseline_flat_region():
+def test_wedge_hv_symmetry_balanced_on_synth_radial_wedge():
     Y, U, V = tp_synthesize.synthesize(720, 486)
     out = tp_artifacts.measure(Y, U, V, _identity())
     w = out["regions"]["WEDGE_HV_SYMMETRY"]
-    # Synth does not render the radial wedge yet, so cell (8,11) is
-    # plain grey + grid line. H and V std are tiny; ratio is undefined
-    # or near 1.0.
-    assert w.get("h_modulation_std", 0) < 50.0
-    assert w.get("v_modulation_std", 0) < 50.0
+    # The synth now renders a clean Siemens-star-style radial wedge,
+    # so both H and V cross-sections carry strong luma modulation.
+    # An unbiased decoder reports the H/V ratio close to 1.0.
+    assert w.get("h_modulation_std", 0) > 50.0
+    assert w.get("v_modulation_std", 0) > 50.0
+    ratio = w.get("hv_ratio")
+    assert ratio is not None and 0.7 < ratio < 1.4, w
 
 
 def test_wedge_hv_symmetry_detects_h_only_pattern():
@@ -95,7 +97,7 @@ TESTS = [
     test_zone_plate_chroma_leak_detects_injected_chroma,
     test_cross_color_metric_zero_on_synthesized_bursts,
     test_summary_keys_present,
-    test_wedge_hv_symmetry_baseline_flat_region,
+    test_wedge_hv_symmetry_balanced_on_synth_radial_wedge,
     test_wedge_hv_symmetry_detects_h_only_pattern,
 ]
 

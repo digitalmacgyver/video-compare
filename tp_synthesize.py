@@ -155,6 +155,33 @@ def _draw_chroma_bursts(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> None:
         V[y:y + h, x // 2:(x + w) // 2] = stripe_v[None, :]
 
 
+def _draw_radial_wedge(Y: np.ndarray) -> None:
+    """Render the radial wedge (Siemens-star-style resolution probe) in
+    cell (8,11). N alternating black/white pie wedges between
+    inner_radius and outer_radius around the chart-spec center."""
+    rw = tp_chart.RADIAL_WEDGE
+    cx, cy = rw["center_xy"]
+    r_in  = float(rw["inner_radius_px"])
+    r_out = float(rw["outer_radius_px"])
+    n_pairs = int(rw["n_wedge_pairs"])
+    cell_x, cell_y, cell_w, cell_h = rw["cell_box"]
+    # Iterate over pixels of the cell.
+    ys = np.arange(cell_y, cell_y + cell_h)
+    xs = np.arange(cell_x, cell_x + cell_w)
+    xx, yy = np.meshgrid(xs, ys)
+    dx = xx - cx
+    dy = yy - cy
+    r = np.sqrt(dx * dx + dy * dy)
+    theta = np.arctan2(dy, dx)
+    in_wedge = (r >= r_in) & (r <= r_out)
+    # n_pairs around the full circle: 2*n_pairs sign changes per circle.
+    sign = (np.sin(theta * n_pairs) >= 0)
+    tile = np.where(sign, tp_chart.WHITE_Y10, tp_chart.BLACK_Y10).astype(np.uint16)
+    sub = Y[cell_y:cell_y + cell_h, cell_x:cell_x + cell_w]
+    sub_masked = np.where(in_wedge, tile, sub)
+    Y[cell_y:cell_y + cell_h, cell_x:cell_x + cell_w] = sub_masked.astype(np.uint16)
+
+
 def _draw_pulse_cells(Y: np.ndarray) -> None:
     """Render the 3 pulse-and-bar cells on the right edge of the chart.
     Each cell is filled with its background level and a sin²-shaped 2T
@@ -315,6 +342,7 @@ def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndar
     _draw_gray_strip(Y, U, V)
     _draw_wedge_column(Y)
     _draw_pulse_cells(Y)
+    _draw_radial_wedge(Y)
     _draw_bursts(Y)
     _draw_saturated_chroma_blocks(Y, U, V)
     _draw_chroma_bursts(Y, U, V)

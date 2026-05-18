@@ -280,6 +280,11 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
                        "chart-spec 200 ns, ringing and echoes on the "
                        "white-on-grey pulse, and the presence of a "
                        "black clipper that hides footroom distortions.")
+        + _sortable_th("Wedge",
+                       "0-100 score from the radial wedge in cell "
+                       "(8,11). Penalises resolution shortfall below "
+                       "400 TVL, cross-color leak into the luma-only "
+                       "wedge, and H/V aperture asymmetry.")
         + _sortable_th("Overall",
                        "Mean of the available category scores.")
         + "</tr>"
@@ -293,7 +298,8 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
         fq = _score_frequency(c)
         cl = _score_chroma_staircase(c)
         pl = _score_pulse(c)
-        vals = [v for v in (g, co, gs, fq, cl, pl)
+        rw = _score_radial_wedge(c)
+        vals = [v for v in (g, co, gs, fq, cl, pl, rw)
                 if v is not None and not (isinstance(v, float) and v != v)]
         overall = sum(vals) / len(vals) if vals else float("nan")
         cells = [
@@ -304,6 +310,7 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
             _td_num(fq,      "{:.1f}", cls=_score_class(fq)),
             _td_num(cl,      "{:.1f}", cls=_score_class(cl)),
             _td_num(pl,      "{:.1f}", cls=_score_class(pl)),
+            _td_num(rw,      "{:.1f}", cls=_score_class(rw)),
             _td_num(overall, "{:.1f}", cls=_score_class(overall)),
         ]
         rows.append("<tr>" + "".join(cells) + "</tr>")
@@ -538,6 +545,323 @@ def render_grayscale_overview(captures: List[Dict[str, Any]]) -> str:
     <thead>{head}</thead>
     <tbody>{''.join(rows)}</tbody>
   </table>
+</section>
+"""
+
+
+# ---------------------------------------------------------------------
+# Radial wedge — resolution limit + decoder cross-effects (cell 8,11).
+# ---------------------------------------------------------------------
+
+def _radial_wedge_data(c: Dict[str, Any]):
+    return c.get("radial_wedge") or {}
+
+
+def _tvl_class(tvl):
+    if tvl is None:
+        return ""
+    if tvl >= 400:
+        return "delta-good"
+    if tvl >= 300:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def _hv_ratio_class(ratio):
+    if ratio is None:
+        return ""
+    d = abs(ratio - 1.0)
+    if d < 0.05:
+        return "delta-good"
+    if d < 0.15:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def _score_radial_wedge(c: Dict[str, Any]) -> float:
+    """0-100. Penalises low resolution (TVL well below the chart's max),
+    cross-color leak into the luma-only wedge, and H/V aperture
+    asymmetry (decoder sharpens one axis more than the other)."""
+    rw = _radial_wedge_data(c)
+    if not rw:
+        return float("nan")
+    pen = 0.0
+    rl = rw.get("resolution_limit") or {}
+    tvl = rl.get("tvl")
+    # Target: chart-max ≈ 450 TVL. Penalise shortfall below 400 TVL.
+    if tvl is not None:
+        if tvl < 400:
+            pen += _clamp((400 - tvl) / 5.0, 0, 40)
+    else:
+        pen += 25
+    cc = rw.get("cross_color_chroma_rms")
+    if cc is not None:
+        pen += _clamp((cc - 5.0) / 4.0, 0, 30)
+    ratio = rw.get("hv_ratio")
+    if ratio is not None:
+        pen += _clamp(abs(ratio - 1.0) * 80.0, 0, 20)
+    return max(0.0, 100.0 - pen)
+
+
+_SYNTH_RADIAL_WEDGE_URL = None
+
+
+def _synth_radial_wedge_data_url(upscale: int = 8) -> str:
+    """Embed an 8×-upscaled crop of the synth radial wedge as a
+    reference baseline."""
+    global _SYNTH_RADIAL_WEDGE_URL
+    if _SYNTH_RADIAL_WEDGE_URL is not None:
+        return _SYNTH_RADIAL_WEDGE_URL
+    try:
+        import base64
+        import cv2
+        bgr = _synth_frame_bgr()
+        rw = tp_chart.RADIAL_WEDGE
+        x, y, w, h = rw["cell_box"]
+        crop = bgr[y:y + h, x:x + w]
+        if upscale > 1:
+            crop = cv2.resize(
+                crop, (crop.shape[1] * upscale, crop.shape[0] * upscale),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        ok, png = cv2.imencode(".png", crop)
+        if not ok:
+            return ""
+        _SYNTH_RADIAL_WEDGE_URL = (
+            "data:image/png;base64,"
+            + base64.b64encode(png.tobytes()).decode("ascii")
+        )
+    except Exception:
+        _SYNTH_RADIAL_WEDGE_URL = ""
+    return _SYNTH_RADIAL_WEDGE_URL
+
+
+def _capture_radial_wedge_data_url(c: Dict[str, Any]) -> str:
+    import base64
+    src = c.get("_source_json_path")
+    if not src:
+        return ""
+    stem = os.path.splitext(src)[0]
+    path = stem + "_radial_wedge.png"
+    if not os.path.exists(path):
+        return ""
+    with open(path, "rb") as f:
+        return ("data:image/png;base64,"
+                + base64.b64encode(f.read()).decode("ascii"))
+
+
+def render_radial_wedge_overview(captures: List[Dict[str, Any]]) -> str:
+    head = (
+        "<tr>"
+        + _sortable_th("Capture",
+                       "Capture file name.", kind="text")
+        + _sortable_th("Resolution limit (TVL)",
+                       "Highest TV-line count the decoder can still "
+                       "resolve in the radial wedge (the smallest "
+                       "radius where wedge modulation is still ≥ 50 % "
+                       "of its peak). Higher = sharper.")
+        + _sortable_th("Cross-color (rms)",
+                       "Chroma RMS over the wedge box. The wedge is "
+                       "black-and-white only, so any chroma here is "
+                       "decoder cross-color.")
+        + _sortable_th("H/V ratio",
+                       "Std-dev ratio of luma along a horizontal vs "
+                       "vertical cross-section through the wedge "
+                       "center. 1.00 = balanced; >1 = decoder "
+                       "sharpens horizontally more than vertically; "
+                       "<1 = vice versa.")
+        + _sortable_th("N pairs",
+                       "Number of black/white wedge pairs detected by "
+                       "FFT of the outer radii. The chart's design "
+                       "value is 16; a different number on a real "
+                       "capture usually means the wedge fell partly "
+                       "outside the registration window.")
+        + "</tr>"
+    )
+    rows = []
+    for c in captures:
+        name = _basename(c["_meta"]["capture"])
+        rw = _radial_wedge_data(c)
+        rl = rw.get("resolution_limit") or {}
+        tvl   = rl.get("tvl")
+        cc    = rw.get("cross_color_chroma_rms")
+        ratio = rw.get("hv_ratio")
+        n     = rw.get("n_wedge_pairs_detected")
+        cells = [
+            _td_name(name),
+            _td_num(tvl,   "{:.0f}", cls=_tvl_class(tvl)),
+            _td_num(cc,    "{:.1f}", cls=_chroma_class(cc)),
+            _td_num(ratio, "{:.2f}", cls=_hv_ratio_class(ratio)),
+            _td_num(n,     "{:.0f}",
+                    cls=("delta-good" if n is not None and 14 <= n <= 22
+                         else "delta-warn")),
+        ]
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"""
+<section class="overview">
+  <h2>Radial Wedge Overview</h2>
+  <p class="legend">
+    Per-capture summary of the radial wedge in cell (8,11). The wedge
+    is luma-only, so chroma here is cross-color (Y/C separation
+    failure on a high-frequency luma pattern). The resolution limit
+    is the highest TV-line equivalent the decoder still resolves
+    cleanly; chart-design max is ≈ 450 TVL.
+  </p>
+  <table class="overview-table">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
+def _render_radial_wedge_panel(c: Dict[str, Any]) -> str:
+    cap_name = _basename(c["_meta"]["capture"])
+    rw = _radial_wedge_data(c)
+    if not rw:
+        return (f"<div class='color-panel'><h3>{_h.escape(cap_name)}</h3>"
+                f"<p class='muted'>no radial-wedge data — re-run "
+                f"tp_measure.</p></div>")
+    rl = rw.get("resolution_limit") or {}
+    curve = rw.get("radial_modulation_curve") or []
+    cc    = rw.get("cross_color_chroma_rms")
+    ratio = rw.get("hv_ratio")
+    n     = rw.get("n_wedge_pairs_detected")
+    h_std = rw.get("h_modulation_std")
+    v_std = rw.get("v_modulation_std")
+
+    cap_url = _capture_radial_wedge_data_url(c)
+    if cap_url:
+        cap_img = (f"<figure class='radial-wedge-fig'>"
+                   f"<img src='{cap_url}' alt='radial wedge crop'/>"
+                   f"<figcaption>Decoded wedge "
+                   f"(decoder output, 8× upscaled).</figcaption>"
+                   f"</figure>")
+    else:
+        cap_img = ("<p class='muted small'>no radial-wedge crop "
+                   "sidecar — re-run tp_measure.</p>")
+
+    # Modulation profile mini-table — radius, modulation, FFT peak bin.
+    mod_rows = "".join(
+        f"<tr>"
+        f"<td class='delta'>{entry['radius_px']:.0f}</td>"
+        f"<td class='delta'>{entry['modulation_std']:.1f}</td>"
+        f"<td class='delta'>{entry['fft_peak_bin']}</td>"
+        f"</tr>"
+        for entry in curve
+    )
+
+    tvl_text = (f"<b>{rl['tvl']:.0f} TVL</b>"
+                if rl.get("tvl") is not None else "<b>—</b>")
+    r_text = (f"r = {rl['radius_px']:.0f} px"
+              if rl.get("radius_px") is not None else "")
+
+    cc_verdict = ("clean — no cross-color"
+                  if cc is not None and cc < 10
+                  else f"chroma leak ({cc:.0f} rms)"
+                  if cc is not None and cc < 100
+                  else f"heavy cross-color ({cc:.0f} rms)"
+                  if cc is not None else "—")
+    if ratio is None:
+        hv_verdict = "—"
+    elif abs(ratio - 1.0) < 0.05:
+        hv_verdict = "balanced aperture"
+    elif ratio > 1.0:
+        hv_verdict = (f"sharpens H more than V "
+                      f"({(ratio - 1.0) * 100:+.0f} %)")
+    else:
+        hv_verdict = (f"sharpens V more than H "
+                      f"({(1.0 - ratio) * 100:.0f} %)")
+
+    summary_html = (
+        "<ul class='geo-list'>"
+        f"<li>Resolution limit: {tvl_text} "
+        f"<span class='muted'>({r_text}, threshold 50 % of peak "
+        f"modulation)</span>.</li>"
+        f"<li>Cross-color: "
+        f"<span class='{_chroma_class(cc)}'>"
+        f"{('—' if cc is None else f'{cc:.1f} rms')}</span> "
+        f"— {_h.escape(cc_verdict)}.</li>"
+        f"<li>H/V aperture: "
+        f"<span class='{_hv_ratio_class(ratio)}'>"
+        f"{('—' if ratio is None else f'{ratio:.2f}')}</span> "
+        f"— {_h.escape(hv_verdict)}. "
+        f"<span class='muted'>(H std "
+        f"{('—' if h_std is None else f'{h_std:.1f}')}, V std "
+        f"{('—' if v_std is None else f'{v_std:.1f}')})</span></li>"
+        f"<li>Detected wedge pairs: <b>"
+        f"{('—' if n is None else n)}</b> "
+        f"<span class='muted'>(chart design 16; "
+        f"large deviations point at registration drift).</span></li>"
+        "</ul>"
+    )
+
+    return (
+        f"<div class='color-panel'>"
+        f"<h3>{_h.escape(cap_name)}</h3>"
+        f"<div class='wedge-row'>"
+        f"<div class='wedge-img-col'>{cap_img}</div>"
+        f"<div class='wedge-table-col'>"
+        f"<table class='color-table'>"
+        f"<tr>{_th('Radius (px)', 'Distance from wedge center.')}"
+        f"{_th('Modulation', 'Std-dev of luma samples along the circle of this radius — high = wedges resolvable, low = blurred to grey.')}"
+        f"{_th('FFT peak', 'Dominant angular frequency at this radius (cycles per circumference) from FFT.')}"
+        f"</tr>"
+        + mod_rows +
+        f"</table>"
+        f"<h4>Summary</h4>{summary_html}"
+        f"</div></div></div>"
+    )
+
+
+def render_radial_wedge_panels(captures: List[Dict[str, Any]]) -> str:
+    if not any(c.get("radial_wedge") for c in captures):
+        return ""
+    synth_url = _synth_radial_wedge_data_url()
+    synth_block = (
+        f"<figure class='radial-wedge-fig'>"
+        f"<img src='{synth_url}' alt='synth radial wedge reference'/>"
+        f"<figcaption>Synthetic reference (clean Siemens-star-style "
+        f"radial wedge, 8× upscaled).</figcaption>"
+        f"</figure>" if synth_url else ""
+    )
+    intro = """
+<p class="legend">
+  A small Siemens-star-style radial wedge sits in cell (8,11) — black
+  and white pie slices radiating from a center, narrowing as they
+  approach it. The local spatial frequency at each radius is set by
+  the wedge geometry; the chart spec puts the highest frequency at
+  ~450 TVL near the center, dropping to ~150 TVL at the outer edge.
+</p>
+<p class="legend">
+  <b>What we look for:</b>
+  <ul class="legend">
+    <li><b>Resolution limit</b> — at what radius (and therefore what
+    TVL equivalent) does the decoder stop resolving the wedges? Below
+    the limit, the wedges blur into uniform mid-grey. We report the
+    smallest radius where angular-modulation std-dev is still ≥ 50 %
+    of its peak value.</li>
+    <li><b>Cross-color</b> — the wedge is luma-only, so any chroma
+    energy across the cell is decoder-injected cross-color. High
+    values here mean the decoder is mistaking the wedge's
+    high-frequency luma for chroma (especially near 3.58 MHz).</li>
+    <li><b>H/V aperture asymmetry</b> — std-dev of luma along a
+    horizontal cross-section divided by the same along a vertical
+    cross-section through the wedge center. A decoder with more
+    horizontal sharpening than vertical (or vice versa) pushes this
+    ratio away from 1.0. SDI captures are usually 1.05-1.15 because
+    NTSC's analog horizontal pipeline carries more bandwidth than
+    its vertical (line-rate) one.</li>
+  </ul>
+</p>
+"""
+    panels = [_render_radial_wedge_panel(c) for c in captures]
+    return f"""
+<section class="radial-wedge-panels">
+  <h2>Radial Wedge — resolution &amp; decoder cross-effects</h2>
+  {intro}
+  {synth_block}
+  {''.join(panels)}
 </section>
 """
 
@@ -2421,6 +2745,12 @@ table.overview-table tbody tr:nth-child(odd) { background: rgba(255,255,255,0.01
 .pulse-table img.pulse-spark { display: block; border: 1px solid #2a2e36;
     image-rendering: pixelated; background: #14161a; height: 80px; width: 240px; }
 .pulse-table td.swatch-cell { width: 244px; }
+.radial-wedge-fig { margin: 6px 12px 12px 0; text-align: center; display: inline-block; }
+.radial-wedge-fig img { display: block; border: 1px solid #2a2e36;
+    image-rendering: pixelated; background: #14161a;
+    max-width: 480px; max-height: 480px; }
+.radial-wedge-fig figcaption { font-size: 11px; color: #b8c0cc;
+    margin-top: 4px; max-width: 480px; }
 """
 
 
@@ -3147,6 +3477,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_frequency_wedge_overview(captures)
         + render_chroma_staircase_overview(captures)
         + render_pulse_overview(captures)
+        + render_radial_wedge_overview(captures)
     )
     details = (
         render_geometry_section(captures)
@@ -3156,9 +3487,9 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_frequency_wedge_section(captures)
         + render_chroma_staircase_panels(captures)
         + render_pulse_panels(captures)
+        + render_radial_wedge_panels(captures)
         + render_luma_scale_analysis(captures)
         + render_artifacts(captures)
-        + render_radial_wedge(captures)
         + render_decoder_class(captures)
         + render_sample_diagnostics(captures)
     )
@@ -3169,6 +3500,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_tartan_deltas(captures)
         + render_gray_deltas(captures)
         + render_frequency_response(captures)
+        + render_radial_wedge(captures)
         + '</section>'
     )
     return f"""<!doctype html>

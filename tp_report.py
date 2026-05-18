@@ -61,6 +61,15 @@ def _write_sidecars(capture_path: str, json_path: str,
         cv2.imwrite(stem + "_wedge.png", wedge_bgr)
     except Exception as e:
         print(f"  WARNING: wedge-crops PNG failed: {e}", file=sys.stderr)
+    try:
+        import tp_radial_wedge_crops
+        import cv2
+        rw_bgr = tp_radial_wedge_crops.build(capture_path, json_path,
+                                             frame_index)
+        cv2.imwrite(stem + "_radial_wedge.png", rw_bgr)
+    except Exception as e:
+        print(f"  WARNING: radial-wedge-crops PNG failed: {e}",
+              file=sys.stderr)
 
 
 def _ensure_json(capture_path: str, json_path: str, frame_index: int,
@@ -90,7 +99,8 @@ def _ensure_json(capture_path: str, json_path: str, frame_index: int,
         needs = (force
                  or not os.path.exists(stem + "_overlay.png")
                  or not os.path.exists(stem + "_fiducials.png")
-                 or not os.path.exists(stem + "_wedge.png"))
+                 or not os.path.exists(stem + "_wedge.png")
+                 or not os.path.exists(stem + "_radial_wedge.png"))
         if needs:
             _write_sidecars(capture_path, json_path, frame_index)
     return True
