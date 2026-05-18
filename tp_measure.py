@@ -973,6 +973,81 @@ def measure_yc_timing(capture_path: str, frame_index: int,
     }
 
 
+def measure_zone_plate(capture_path: str, frame_index: int,
+                       affine, n_frames: int = 3) -> Dict[str, Any]:
+    """Measure chroma RMS over the moving-zone-plate region (cells
+    3..6, 4..9) and average across `n_frames` successive frames.
+
+    The zone plate is a moving luma-only pattern. Any chroma here is
+    decoder-injected cross-color from high-frequency luma. Because
+    the pattern moves between frames, the chroma RMS varies frame-to-
+    frame; averaging gives a stable estimate of how much chroma the
+    decoder is producing on this content.
+    """
+    region = next(r for r in tp_chart.ARTIFACT_REGIONS
+                  if r["id"] == "ZP_CHROMA_LEAK")
+    box_ideal = region["ideal_box"]
+    # Project the box through the affine.
+    x, y, w, h = box_ideal
+    cx, cy = _apply_affine(affine, x + w / 2.0, y + h / 2.0)
+    box_cap = (int(round(cx - w / 2.0)),
+               int(round(cy - h / 2.0)),
+               int(w), int(h))
+
+    threshold = 15.0  # matches tp_artifacts.THRESHOLDS["T_zp_threshold"]
+    per_frame = []
+    for delta in range(n_frames):
+        try:
+            Y_raw, U_raw, V_raw, _ = extract_frame(capture_path,
+                                                   frame_index + delta)
+            Yp, Up, Vp, _ = pad_to_486(Y_raw, U_raw, V_raw)
+        except Exception:
+            break
+        bx, by, bw, bh = box_cap
+        x0 = max(0, bx); y0 = max(0, by)
+        x1 = min(Yp.shape[1], bx + bw); y1 = min(Yp.shape[0], by + bh)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        ux0 = x0 // 2; ux1 = max(ux0 + 1, x1 // 2)
+        u_win = Up[y0:y1, ux0:ux1].astype(np.float32)
+        v_win = Vp[y0:y1, ux0:ux1].astype(np.float32)
+        du = u_win - tp_chart.CHROMA_CENTER
+        dv = v_win - tp_chart.CHROMA_CENTER
+        crms = float(np.sqrt((du * du + dv * dv).mean()))
+        per_frame.append({"chroma_rms": crms})
+
+    if not per_frame:
+        return {
+            "regions_used": 1,
+            "n_frames":     0,
+            "per_frame":    [],
+            "mean_chroma_rms": None,
+            "max_chroma_rms":  None,
+            "min_chroma_rms":  None,
+            "frame_std_chroma_rms": None,
+            "chroma_present": None,
+            "threshold":      threshold,
+            "sample_box_capture": list(box_cap),
+        }
+
+    vals = [pf["chroma_rms"] for pf in per_frame]
+    mean_rms = float(sum(vals) / len(vals))
+    max_rms  = float(max(vals))
+    min_rms  = float(min(vals))
+    std_rms  = float(np.std(vals)) if len(vals) > 1 else None
+    return {
+        "n_frames":            len(per_frame),
+        "per_frame":           per_frame,
+        "mean_chroma_rms":     mean_rms,
+        "max_chroma_rms":      max_rms,
+        "min_chroma_rms":      min_rms,
+        "frame_std_chroma_rms": std_rms,
+        "chroma_present":      bool(mean_rms > threshold),
+        "threshold":           threshold,
+        "sample_box_capture":  list(box_cap),
+    }
+
+
 def measure_pulse_response(Y, U, V, affine) -> Dict[str, Any]:
     """Sample the three 2T pulse cells (white-on-black, black-on-white,
     white-on-grey) and return per-cell amplitude, FWHM, ringing, echo,
@@ -1068,6 +1143,7 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
     pulse_response = measure_pulse_response(Y_p, U_p, V_p, M)
     radial_wedge = measure_radial_wedge(Y_p, U_p, V_p, M)
     yc_timing = measure_yc_timing(capture_path, frame_index, M, n_frames=3)
+    zone_plate = measure_zone_plate(capture_path, frame_index, M, n_frames=3)
 
     return {
         "_meta": meta,
@@ -1082,6 +1158,7 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
         "pulse_response":     pulse_response,
         "radial_wedge":       radial_wedge,
         "yc_timing":          yc_timing,
+        "zone_plate":         zone_plate,
     }
 
 

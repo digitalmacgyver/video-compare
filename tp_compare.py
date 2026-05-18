@@ -290,6 +290,11 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
                        "bursts sampled across 3 frames. Penalises "
                        "frame-to-frame dot-crawl wiggle and narrow "
                        "chroma bandwidth.")
+        + _sortable_th("ZonePlate",
+                       "0-100 score from chroma RMS over the moving "
+                       "zone-plate area, averaged across 3 frames. "
+                       "Higher = cleaner Y/C separation on "
+                       "high-frequency moving luma content.")
         + _sortable_th("Overall",
                        "Mean of the available category scores.")
         + "</tr>"
@@ -305,7 +310,8 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
         pl = _score_pulse(c)
         rw = _score_radial_wedge(c)
         yc = _score_yc_timing(c)
-        vals = [v for v in (g, co, gs, fq, cl, pl, rw, yc)
+        zp = _score_zone_plate(c)
+        vals = [v for v in (g, co, gs, fq, cl, pl, rw, yc, zp)
                 if v is not None and not (isinstance(v, float) and v != v)]
         overall = sum(vals) / len(vals) if vals else float("nan")
         cells = [
@@ -318,6 +324,7 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
             _td_num(pl,      "{:.1f}", cls=_score_class(pl)),
             _td_num(rw,      "{:.1f}", cls=_score_class(rw)),
             _td_num(yc,      "{:.1f}", cls=_score_class(yc)),
+            _td_num(zp,      "{:.1f}", cls=_score_class(zp)),
             _td_num(overall, "{:.1f}", cls=_score_class(overall)),
         ]
         rows.append("<tr>" + "".join(cells) + "</tr>")
@@ -552,6 +559,210 @@ def render_grayscale_overview(captures: List[Dict[str, Any]]) -> str:
     <thead>{head}</thead>
     <tbody>{''.join(rows)}</tbody>
   </table>
+</section>
+"""
+
+
+# ---------------------------------------------------------------------
+# Zone plate — chroma leak into the moving luma-only zone pattern.
+# ---------------------------------------------------------------------
+
+def _zone_plate_data(c: Dict[str, Any]):
+    return c.get("zone_plate") or {}
+
+
+def _zp_chroma_class(rms):
+    if rms is None:
+        return ""
+    if rms < 30:
+        return "delta-good"
+    if rms < 80:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def _score_zone_plate(c: Dict[str, Any]) -> float:
+    """0-100. Lower chroma RMS in the zone plate region = cleaner Y/C
+    separation on high-frequency moving luma content."""
+    zp = _zone_plate_data(c)
+    if not zp:
+        return float("nan")
+    mean = zp.get("mean_chroma_rms")
+    if mean is None:
+        return float("nan")
+    # 20 rms = noise floor (no penalty); 200 rms = full penalty.
+    pen = _clamp((mean - 20.0) / 1.8, 0, 100)
+    return max(0.0, 100.0 - pen)
+
+
+def render_zone_plate_overview(captures: List[Dict[str, Any]]) -> str:
+    head = (
+        "<tr>"
+        + _sortable_th("Capture",
+                       "Capture file name.", kind="text")
+        + _sortable_th("Mean chroma RMS",
+                       "Mean chroma RMS over the moving zone-plate "
+                       "region (cells 3..6, 4..9), averaged across "
+                       "3 successive frames. The zone plate is "
+                       "luma-only, so any chroma here is decoder "
+                       "cross-color. Lower is better.")
+        + _sortable_th("Min",
+                       "Single-frame minimum chroma RMS over the "
+                       "3-frame stack.")
+        + _sortable_th("Max",
+                       "Single-frame maximum chroma RMS over the "
+                       "3-frame stack.")
+        + _sortable_th("Frame-to-frame std",
+                       "Std-dev of the per-frame chroma RMS values. "
+                       "Non-zero = the cross-color amount varies as "
+                       "the zone plate moves; near-zero = the "
+                       "cross-color is locked to a static feature.")
+        + _sortable_th("Chroma present?",
+                       "Binary flag (mean RMS above the 15-code "
+                       "noise-floor threshold).", kind="text")
+        + "</tr>"
+    )
+    rows = []
+    for c in captures:
+        name = _basename(c["_meta"]["capture"])
+        zp = _zone_plate_data(c)
+        mean = zp.get("mean_chroma_rms")
+        mn = zp.get("min_chroma_rms")
+        mx = zp.get("max_chroma_rms")
+        std = zp.get("frame_std_chroma_rms")
+        present = zp.get("chroma_present")
+        present_str = ("—" if present is None
+                       else ("yes" if present else "no"))
+        present_class = ("" if present is None
+                         else ("delta-bad" if present else "delta-good"))
+        cells = [
+            _td_name(name),
+            _td_num(mean, "{:.1f}", cls=_zp_chroma_class(mean)),
+            _td_num(mn,   "{:.1f}"),
+            _td_num(mx,   "{:.1f}"),
+            _td_num(std,  "{:.2f}"),
+            f'<td class="name {present_class}" '
+            f'data-v="{0 if present else 1}">{present_str}</td>',
+        ]
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"""
+<section class="overview">
+  <h2>Zone Plate Overview</h2>
+  <p class="legend">
+    Per-capture summary of decoder cross-color injected into the
+    moving zone-plate area in the center of the chart. The chart
+    renders the zone plate as luma-only; any chroma we measure here
+    is the decoder mistaking high-frequency luma for chroma. Mean
+    chroma RMS is averaged across 3 successive frames to smooth out
+    the moving-pattern variation.
+  </p>
+  <table class="overview-table">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
+def _zp_verdict(mean_rms):
+    if mean_rms is None:
+        return "—"
+    if mean_rms < 30:
+        return "clean — no significant cross-color"
+    if mean_rms < 80:
+        return f"moderate cross-color ({mean_rms:.0f} rms)"
+    return f"heavy cross-color ({mean_rms:.0f} rms)"
+
+
+def _render_zone_plate_panel(c: Dict[str, Any]) -> str:
+    cap_name = _basename(c["_meta"]["capture"])
+    zp = _zone_plate_data(c)
+    if not zp:
+        return (f"<div class='color-panel'><h3>{_h.escape(cap_name)}</h3>"
+                f"<p class='muted'>no zone-plate data — re-run "
+                f"tp_measure.</p></div>")
+    per_frame = zp.get("per_frame") or []
+    if not per_frame:
+        return (f"<div class='color-panel'><h3>{_h.escape(cap_name)}</h3>"
+                f"<p class='muted'>zone-plate region out of frame.</p>"
+                f"</div>")
+    rows_html = []
+    for i, pf in enumerate(per_frame):
+        rms = pf.get("chroma_rms")
+        rows_html.append(
+            f"<tr>"
+            f"<td class='name'>Frame {i}</td>"
+            f"<td class='delta {_zp_chroma_class(rms)}'>"
+            f"{('—' if rms is None else f'{rms:.2f}')}</td>"
+            f"</tr>"
+        )
+    mean = zp.get("mean_chroma_rms")
+    min_rms = zp.get("min_chroma_rms")
+    max_rms = zp.get("max_chroma_rms")
+    std = zp.get("frame_std_chroma_rms")
+    threshold = zp.get("threshold", 15.0)
+    present = zp.get("chroma_present")
+    n_frames = zp.get("n_frames")
+    summary_html = (
+        "<ul class='geo-list'>"
+        f"<li>Frames analysed: <b>{n_frames}</b>.</li>"
+        f"<li>Mean chroma RMS: <b>"
+        f"<span class='{_zp_chroma_class(mean)}'>"
+        f"{('—' if mean is None else f'{mean:.2f}')}</span></b> "
+        f"— {_h.escape(_zp_verdict(mean))}.</li>"
+        f"<li>Per-frame range: "
+        f"min <b>{('—' if min_rms is None else f'{min_rms:.2f}')}</b>, "
+        f"max <b>{('—' if max_rms is None else f'{max_rms:.2f}')}</b>, "
+        f"std <b>{('—' if std is None else f'{std:.2f}')}</b> "
+        f"<span class='muted'>(non-zero std = chroma varies as the "
+        f"zone plate moves).</span></li>"
+        f"<li>Above threshold ({threshold:.0f} rms): "
+        f"<b>{('yes' if present else 'no')}</b> "
+        f"<span class='muted'>(binary flag for the older "
+        f"decoder-class rule).</span></li>"
+        "</ul>"
+    )
+    return (
+        f"<div class='color-panel'>"
+        f"<h3>{_h.escape(cap_name)}</h3>"
+        f"<table class='color-table'>"
+        f"<tr>{_th('Frame', 'Index in the 3-frame stack (0 = the requested frame_index).')}"
+        f"{_th('Chroma RMS', 'Chroma deviation from neutral, RMS-averaged over the entire zone-plate box. The chart renders the zone plate as luma-only so any chroma is decoder-injected.')}"
+        f"</tr>"
+        + "".join(rows_html) +
+        f"</table>"
+        f"<h4>Summary</h4>{summary_html}"
+        f"</div>"
+    )
+
+
+def render_zone_plate_panels(captures: List[Dict[str, Any]]) -> str:
+    if not any(c.get("zone_plate") for c in captures):
+        return ""
+    intro = """
+<p class="legend">
+  The center of the chart (cells 3..6, 4..9) carries a <b>moving
+  zone-plate</b> pattern — concentric ring structure with no chroma.
+  In an analog composite chain the high-frequency luma in this region
+  spans and overlaps the color-subcarrier band, so a decoder with
+  imperfect Y/C separation injects chroma where none was authored.
+  We average chroma RMS over the same 3 frames used by the Y/C
+  timing test so the moving pattern's frame-to-frame variation is
+  smoothed out.
+</p>
+<p class="legend">
+  <b>How to read the numbers:</b> chroma RMS &lt; 30 codes is clean
+  (sits near the noise floor); 30–80 is moderate cross-color; &gt; 80
+  is heavy cross-color (decoder is producing significant false
+  color where the chart had none).
+</p>
+"""
+    panels = [_render_zone_plate_panel(c) for c in captures]
+    return f"""
+<section class="zone-plate-panels">
+  <h2>Zone Plate — cross-color on moving luma content</h2>
+  {intro}
+  {''.join(panels)}
 </section>
 """
 
@@ -3759,6 +3970,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_pulse_overview(captures)
         + render_radial_wedge_overview(captures)
         + render_yc_timing_overview(captures)
+        + render_zone_plate_overview(captures)
     )
     details = (
         render_geometry_section(captures)
@@ -3770,6 +3982,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_pulse_panels(captures)
         + render_radial_wedge_panels(captures)
         + render_yc_timing_panels(captures)
+        + render_zone_plate_panels(captures)
         + render_luma_scale_analysis(captures)
         + render_artifacts(captures)
         + render_decoder_class(captures)

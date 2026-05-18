@@ -1047,6 +1047,78 @@ def test_overall_summary_includes_yc_column():
     assert ">Y/C<" in html
 
 
+def _make_capture_with_zone_plate(tag, *, mean=50.0, frames=(50.0, 51.0, 49.0)):
+    c = _make_capture_json_with_geometry(tag)
+    vals = list(frames)
+    c["zone_plate"] = {
+        "n_frames": len(vals),
+        "per_frame": [{"chroma_rms": v} for v in vals],
+        "mean_chroma_rms": mean,
+        "min_chroma_rms": min(vals),
+        "max_chroma_rms": max(vals),
+        "frame_std_chroma_rms": float(__import__("numpy").std(vals)),
+        "chroma_present": mean > 15.0,
+        "threshold": 15.0,
+        "sample_box_capture": [180, 108, 360, 216],
+    }
+    return c
+
+
+def test_zone_plate_overview_lists_capture_and_metrics():
+    a = _make_capture_with_zone_plate("alpha", mean=50.0)
+    html = tp_compare.render_zone_plate_overview([a])
+    assert "Zone Plate Overview" in html
+    assert "Mean chroma RMS" in html
+    assert "Chroma present?" in html
+    assert "alpha.mov" in html
+    # Mean shown with 1 decimal
+    assert "50.0" in html
+
+
+def test_zone_plate_panel_shows_per_frame_rms_and_summary():
+    a = _make_capture_with_zone_plate("alpha", mean=50.0,
+                                      frames=(50.0, 51.0, 49.0))
+    html = tp_compare.render_zone_plate_panels([a])
+    assert "Zone Plate — cross-color" in html
+    assert "alpha.mov" in html
+    # Per-frame rows
+    assert "Frame 0" in html and "Frame 1" in html and "Frame 2" in html
+    # Per-frame numeric value (one of the frames)
+    assert "51.00" in html
+    # Verdict word for the moderate range
+    assert "moderate" in html
+
+
+def test_zone_plate_panel_flags_clean_and_heavy():
+    clean = _make_capture_with_zone_plate("a", mean=10.0,
+                                          frames=(10.0, 10.5, 9.5))
+    heavy = _make_capture_with_zone_plate("b", mean=120.0,
+                                          frames=(120.0, 121.0, 119.0))
+    html_clean = tp_compare.render_zone_plate_panels([clean])
+    html_heavy = tp_compare.render_zone_plate_panels([heavy])
+    assert "no significant cross-color" in html_clean
+    assert "heavy cross-color" in html_heavy
+
+
+def test_score_zone_plate_clean_signal_high():
+    a = _make_capture_with_zone_plate("alpha", mean=15.0)
+    score = tp_compare._score_zone_plate(a)
+    assert score >= 95, f"clean ZP scored {score}"
+
+
+def test_score_zone_plate_heavy_cross_color_lowers():
+    clean = _make_capture_with_zone_plate("a", mean=15.0)
+    heavy = _make_capture_with_zone_plate("b", mean=150.0)
+    delta = tp_compare._score_zone_plate(clean) - tp_compare._score_zone_plate(heavy)
+    assert delta >= 50
+
+
+def test_overall_summary_includes_zone_plate_column():
+    a = _make_capture_with_zone_plate("alpha")
+    html = tp_compare.render_overall_summary([a])
+    assert ">ZonePlate<" in html
+
+
 def test_render_page_places_registration_summary_in_appendix():
     a = _make_capture_json_with_geometry("alpha")
     b = _make_capture_json_with_geometry("beta")
@@ -1112,6 +1184,12 @@ TESTS_NO_TMPDIR = [
     test_score_yc_timing_heavy_wiggle_lowers,
     test_score_yc_timing_narrow_chroma_lowers,
     test_overall_summary_includes_yc_column,
+    test_zone_plate_overview_lists_capture_and_metrics,
+    test_zone_plate_panel_shows_per_frame_rms_and_summary,
+    test_zone_plate_panel_flags_clean_and_heavy,
+    test_score_zone_plate_clean_signal_high,
+    test_score_zone_plate_heavy_cross_color_lowers,
+    test_overall_summary_includes_zone_plate_column,
     test_render_page_places_registration_summary_in_appendix,
 ]
 TESTS_TMPDIR = [test_compare_cli_writes_html]
