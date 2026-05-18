@@ -496,6 +496,236 @@ def measure_chroma_staircase(Y, U, V, affine) -> Dict[str, Any]:
     }
 
 
+def _profile_through_pulse(Y, region, affine):
+    """Extract a 1D horizontal luma profile through the pulse cell.
+
+    The strip described by `region['sample_strip']` is mapped through
+    the affine, then averaged vertically (mean across the rows of the
+    strip) to give a noise-reduced 1D profile vs x. Returns the
+    profile + the x-axis values + the projected pulse-center x.
+    """
+    s = region["sample_strip"]
+    x, y = s["x"], s["y"]
+    w, h = s["width"], s["height"]
+    # Project the cell corners through the affine and take an axis-
+    # aligned bounding box. The pulse pattern is horizontal so a small
+    # vertical shear is tolerable.
+    x0c, y0c = _apply_affine(affine, x, y)
+    x1c, y1c = _apply_affine(affine, x + w, y + h)
+    cx_strip = (x0c + x1c) / 2.0
+    cy_strip = (y0c + y1c) / 2.0
+    half_w = w // 2
+    half_h = h // 2
+    sx0 = max(0, int(round(cx_strip - half_w)))
+    sx1 = min(Y.shape[1], int(round(cx_strip + half_w)))
+    sy0 = max(0, int(round(cy_strip - half_h)))
+    sy1 = min(Y.shape[0], int(round(cy_strip + half_h)))
+    if sx1 <= sx0 or sy1 <= sy0:
+        return None, None, None
+    strip = Y[sy0:sy1, sx0:sx1].astype(np.float64)
+    profile = strip.mean(axis=0)
+    xs = np.arange(sx0, sx0 + profile.shape[0], dtype=np.float64)
+    pcx, pcy = region["pulse_center_xy"]
+    pcx_cap, _ = _apply_affine(affine, pcx, pcy)
+    return profile, xs, float(pcx_cap)
+
+
+def _interp_half_crossing(profile, xs, peak_idx, half_value, direction):
+    """Linearly interpolate where the profile crosses `half_value`.
+
+    `direction` is +1 (search forward / right of peak) or -1 (search
+    backward / left). Returns the fractional x at the crossing, or
+    None if no crossing in 30 px.
+    """
+    n = profile.shape[0]
+    is_positive_pulse = profile[peak_idx] > half_value
+    i = peak_idx
+    for _ in range(30):
+        j = i + direction
+        if j < 0 or j >= n:
+            return None
+        if (is_positive_pulse and profile[j] <= half_value) or \
+           (not is_positive_pulse and profile[j] >= half_value):
+            # Crossing between i and j.
+            denom = profile[j] - profile[i]
+            if abs(denom) < 1e-9:
+                return float(xs[j])
+            t = (half_value - profile[i]) / denom
+            return float(xs[i] + t * (xs[j] - xs[i]))
+        i = j
+    return None
+
+
+def _measure_one_pulse(Y, region, affine):
+    profile, xs, pcx_cap = _profile_through_pulse(Y, region, affine)
+    if profile is None or profile.size < 10:
+        return {"id": region["id"], "error": "out_of_frame"}
+
+    # Identify pulse polarity from the region spec. Use a tighter
+    # center window (±5 px around the projected pulse center) to find
+    # the extremum even when the background is busy.
+    polarity = region["pulse_polarity"]
+    center_x = pcx_cap
+    center_mask = np.abs(xs - center_x) <= 5.0
+    if not center_mask.any():
+        return {"id": region["id"], "error": "pulse_outside_strip"}
+    center_idxs = np.where(center_mask)[0]
+    if polarity > 0:
+        peak_local_i = int(center_idxs[np.argmax(profile[center_mask])])
+    else:
+        peak_local_i = int(center_idxs[np.argmin(profile[center_mask])])
+    peak_value = float(profile[peak_local_i])
+    peak_x     = float(xs[peak_local_i])
+
+    # Background = median of pixels far from the pulse (|dx| > 8 px).
+    far_mask = np.abs(xs - center_x) > 8.0
+    if far_mask.sum() < 4:
+        return {"id": region["id"], "error": "no_background"}
+    background = float(np.median(profile[far_mask]))
+
+    amplitude_signed = peak_value - background
+    amplitude_abs    = float(abs(amplitude_signed))
+    half_value       = background + amplitude_signed / 2.0
+
+    # FWHM via linear interpolation on the 50% crossings.
+    x_left  = _interp_half_crossing(profile, xs, peak_local_i, half_value, direction=-1)
+    x_right = _interp_half_crossing(profile, xs, peak_local_i, half_value, direction=+1)
+    fwhm_px = (x_right - x_left) if (x_left is not None and x_right is not None) else None
+    fwhm_ns = (fwhm_px / tp_chart.NTSC_SAMPLE_RATE_MHZ * 1000.0
+               if fwhm_px is not None else None)
+
+    # Ringing: max deviation from background in the pre-pulse and
+    # post-pulse "wake" regions (3..12 px from the peak), expressed
+    # as a % of the pulse amplitude. Bias the sign so a same-direction
+    # excursion as the pulse is reported positive (overshoot), and
+    # the opposite is negative (undershoot).
+    def _wake_deviation(left, right):
+        m = ((xs >= left) & (xs <= right))
+        if not m.any():
+            return None
+        wake = profile[m] - background
+        # Pick the most-extreme sample (signed) — magnitude is what we
+        # actually display, but we also keep the sign for verdict logic.
+        idx = int(np.argmax(np.abs(wake)))
+        signed = float(wake[idx])
+        return signed
+    pre_dev  = _wake_deviation(center_x - 12, center_x - 3)
+    post_dev = _wake_deviation(center_x + 3,  center_x + 12)
+    def _pct(d):
+        if d is None or amplitude_abs < 1e-6:
+            return None
+        # Same direction as the main pulse → positive ringing %.
+        # Opposite direction (undershoot) → negative.
+        sign = 1.0 if (d * polarity) >= 0 else -1.0
+        return float(sign * abs(d) / amplitude_abs * 100.0)
+    pre_ring_pct  = _pct(pre_dev)
+    post_ring_pct = _pct(post_dev)
+    max_ring_pct  = max(
+        (abs(p) for p in (pre_ring_pct, post_ring_pct) if p is not None),
+        default=None,
+    )
+
+    # Echo: any deviation further out (|dx| ∈ [15, 25]).
+    def _echo_max(side):
+        if side > 0:
+            m = (xs >= center_x + 15) & (xs <= center_x + 25)
+        else:
+            m = (xs <= center_x - 15) & (xs >= center_x - 25)
+        if not m.any():
+            return None
+        ec = profile[m] - background
+        return float(np.max(np.abs(ec)))
+    echo_left  = _echo_max(-1)
+    echo_right = _echo_max(+1)
+    echo_pct = (max(echo_left or 0.0, echo_right or 0.0) / amplitude_abs * 100.0
+                if amplitude_abs > 1e-6 else None)
+
+    # Black-clipper detection — only meaningful on the black-background
+    # cell. Count footroom (Y<64), at-pedestal (Y in [63, 65]), and
+    # above-black (Y>65) pixels in the strip excluding the pulse.
+    clip_block = None
+    if region["kind"] == "pulse_white_on_black":
+        # Use only "far from pulse" pixels — the rest of the cell is
+        # supposed to be flat black background.
+        bg_mask = (np.abs(xs - center_x) > 5.0)
+        bg_vals = profile[bg_mask]
+        n_total = int(bg_vals.size)
+        n_below = int((bg_vals < tp_chart.BLACK_Y10).sum())
+        n_at    = int(((bg_vals >= tp_chart.BLACK_Y10 - 1)
+                       & (bg_vals <= tp_chart.BLACK_Y10 + 1)).sum())
+        min_bg = float(bg_vals.min()) if bg_vals.size else None
+        # A clipper pins values at exactly BLACK_Y10 with no footroom.
+        # Treat "min ≥ BLACK_Y10 − 1 AND no footroom" as clip-present.
+        clip_present = bool(min_bg is not None and min_bg >= tp_chart.BLACK_Y10 - 1
+                            and n_below == 0)
+        clip_block = {
+            "min_background_y10": min_bg,
+            "background_pixels":  n_total,
+            "below_black_pixels": n_below,
+            "at_pedestal_pixels": n_at,
+            "clip_present":       clip_present,
+        }
+
+    return {
+        "id":                region["id"],
+        "kind":              region["kind"],
+        "background_y10":    background,
+        "peak_y10":          peak_value,
+        "amplitude_y10":     amplitude_signed,
+        "amplitude_abs_y10": amplitude_abs,
+        "amplitude_pct_full_scale": float(amplitude_abs
+                                          / (tp_chart.WHITE_Y10 - tp_chart.BLACK_Y10)
+                                          * 100.0),
+        "fwhm_px":           fwhm_px,
+        "fwhm_ns":           fwhm_ns,
+        "pre_ringing_pct":   pre_ring_pct,
+        "post_ringing_pct":  post_ring_pct,
+        "max_ringing_pct":   max_ring_pct,
+        "echo_left_y10":     echo_left,
+        "echo_right_y10":    echo_right,
+        "echo_pct":          echo_pct,
+        "clip":              clip_block,
+        "profile":           [float(v) for v in profile.tolist()],
+        "profile_x":         [float(v) for v in xs.tolist()],
+    }
+
+
+def measure_pulse_response(Y, U, V, affine) -> Dict[str, Any]:
+    """Sample the three 2T pulse cells (white-on-black, black-on-white,
+    white-on-grey) and return per-cell amplitude, FWHM, ringing, echo,
+    and (on the black-background cell) black-clipper detection.
+
+    The returned dict carries a `regions` list + a `summary` block with
+    the headline numbers used by the overview table.
+    """
+    regions_out = [_measure_one_pulse(Y, r, affine) for r in tp_chart.PULSE_REGIONS]
+    by_id = {r["id"]: r for r in regions_out if "error" not in r}
+
+    summary = {
+        "wob_fwhm_ns":   None,
+        "bow_fwhm_ns":   None,
+        "wog_fwhm_ns":   None,
+        "wog_ringing_pct": None,
+        "wog_echo_pct":  None,
+        "black_clipper_present": None,
+    }
+    wob = by_id.get("PULSE_WOB"); bow = by_id.get("PULSE_BOW")
+    wog = by_id.get("PULSE_WOG")
+    if wob and wob.get("fwhm_ns") is not None:
+        summary["wob_fwhm_ns"] = wob["fwhm_ns"]
+    if bow and bow.get("fwhm_ns") is not None:
+        summary["bow_fwhm_ns"] = bow["fwhm_ns"]
+    if wog and wog.get("fwhm_ns") is not None:
+        summary["wog_fwhm_ns"] = wog["fwhm_ns"]
+    if wog:
+        summary["wog_ringing_pct"] = wog.get("max_ringing_pct")
+        summary["wog_echo_pct"]    = wog.get("echo_pct")
+    if wob and wob.get("clip"):
+        summary["black_clipper_present"] = wob["clip"]["clip_present"]
+
+    return {"regions": regions_out, "summary": summary}
+
+
 def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
     Y, U, V, meta = extract_frame(capture_path, frame_index)
     Y_p, U_p, V_p, padding = pad_to_486(Y, U, V)
@@ -552,6 +782,7 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
     geometry_block = _build_geometry_block(reg_full)
     stage3 = _measure_stage3(Y_p, U_p, V_p, M, reg["quality_flag"])
     chroma_staircase = measure_chroma_staircase(Y_p, U_p, V_p, M)
+    pulse_response = measure_pulse_response(Y_p, U_p, V_p, M)
 
     return {
         "_meta": meta,
@@ -563,6 +794,7 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
         "artifacts":          stage3["artifacts"],
         "decoder_class":      stage3["decoder_class"],
         "chroma_staircase":   chroma_staircase,
+        "pulse_response":     pulse_response,
     }
 
 

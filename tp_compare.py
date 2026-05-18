@@ -274,6 +274,12 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
                        "(33/66/100 % boxes deviating from a linear "
                        "ramp) and differential phase (hue drifting as "
                        "saturation rises).")
+        + _sortable_th("Pulse",
+                       "0-100 score from the three 2T pulse-and-bar "
+                       "cells. Penalises FWHM broadening past the "
+                       "chart-spec 200 ns, ringing and echoes on the "
+                       "white-on-grey pulse, and the presence of a "
+                       "black clipper that hides footroom distortions.")
         + _sortable_th("Overall",
                        "Mean of the available category scores.")
         + "</tr>"
@@ -286,7 +292,8 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
         gs = _score_grayscale(c)
         fq = _score_frequency(c)
         cl = _score_chroma_staircase(c)
-        vals = [v for v in (g, co, gs, fq, cl)
+        pl = _score_pulse(c)
+        vals = [v for v in (g, co, gs, fq, cl, pl)
                 if v is not None and not (isinstance(v, float) and v != v)]
         overall = sum(vals) / len(vals) if vals else float("nan")
         cells = [
@@ -296,6 +303,7 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
             _td_num(gs,      "{:.1f}", cls=_score_class(gs)),
             _td_num(fq,      "{:.1f}", cls=_score_class(fq)),
             _td_num(cl,      "{:.1f}", cls=_score_class(cl)),
+            _td_num(pl,      "{:.1f}", cls=_score_class(pl)),
             _td_num(overall, "{:.1f}", cls=_score_class(overall)),
         ]
         rows.append("<tr>" + "".join(cells) + "</tr>")
@@ -530,6 +538,375 @@ def render_grayscale_overview(captures: List[Dict[str, Any]]) -> str:
     <thead>{head}</thead>
     <tbody>{''.join(rows)}</tbody>
   </table>
+</section>
+"""
+
+
+# ---------------------------------------------------------------------
+# Pulse-and-bar (2T pulse) analysis.
+# ---------------------------------------------------------------------
+
+PULSE_LABELS = {
+    "PULSE_WOB": "White pulse on black",
+    "PULSE_BOW": "Black pulse on white",
+    "PULSE_WOG": "White pulse on 20% grey",
+}
+
+_PULSE_ORDER = ["PULSE_WOB", "PULSE_BOW", "PULSE_WOG"]
+
+
+def _pulse_data(c: Dict[str, Any]):
+    return c.get("pulse_response") or {}
+
+
+def _pulse_region_by_id(c: Dict[str, Any], rid: str):
+    data = _pulse_data(c)
+    for r in data.get("regions") or []:
+        if r.get("id") == rid:
+            return r
+    return None
+
+
+def _ideal_2t_fwhm_ns():
+    return tp_chart.NTSC_PULSE_2T_FWHM_PX / tp_chart.NTSC_SAMPLE_RATE_MHZ * 1000.0
+
+
+def _fwhm_class(ns):
+    if ns is None:
+        return ""
+    ideal = _ideal_2t_fwhm_ns()
+    # Sharper than 2T (under-shoot of ideal) is also unexpected — flag
+    # both directions. Tolerance ±50 ns ≈ ±0.7 px.
+    if abs(ns - ideal) < 50:
+        return "delta-good"
+    if abs(ns - ideal) < 100:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def _ringing_class(pct):
+    if pct is None:
+        return ""
+    p = abs(pct)
+    if p < 5:
+        return "delta-good"
+    if p < 15:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def _echo_class(pct):
+    if pct is None:
+        return ""
+    p = abs(pct)
+    if p < 3:
+        return "delta-good"
+    if p < 8:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def _score_pulse(c: Dict[str, Any]) -> float:
+    """0-100. Penalises FWHM broadening past ideal, excessive ringing on
+    the white-on-grey pulse, and the presence of a black clipper that
+    pins footroom values at pedestal.
+
+    The FWHM penalty only kicks in past ~250 ns. Real decoders almost
+    always broaden a 2T (200 ns) pulse to 220-260 ns just from BT.601
+    filtering — that's not a defect.
+    """
+    s = (_pulse_data(c).get("summary") or {})
+    pen = 0.0
+    fwhm_tolerance_ns = 250.0
+    for fwhm in (s.get("wob_fwhm_ns"), s.get("bow_fwhm_ns"),
+                 s.get("wog_fwhm_ns")):
+        if fwhm is None:
+            continue
+        if fwhm > fwhm_tolerance_ns:
+            pen += _clamp((fwhm - fwhm_tolerance_ns) / 10.0, 0, 10)
+    ringing = s.get("wog_ringing_pct")
+    if ringing is not None:
+        pen += _clamp(abs(ringing) * 1.2, 0, 25)
+    echo = s.get("wog_echo_pct")
+    if echo is not None:
+        pen += _clamp(abs(echo) * 2.0, 0, 15)
+    if s.get("black_clipper_present") is True:
+        pen += 10
+    return max(0.0, 100.0 - pen)
+
+
+def _profile_to_png_data_url(profile, baseline_y10, peak_y10, polarity,
+                             width_px: int = 240, height_px: int = 80):
+    """Render the 1D pulse profile as a small spark-line PNG suitable
+    for embedding in the report. The horizontal axis is sample number;
+    the vertical axis goes from 0 to 1023 (full 10-bit Y range)."""
+    import base64
+    import cv2
+    import numpy as np
+    img = np.full((height_px, width_px, 3), 22, dtype=np.uint8)
+    # Reference baseline line.
+    by = int(round((1.0 - baseline_y10 / 1023.0) * (height_px - 1)))
+    cv2.line(img, (0, by), (width_px - 1, by), (60, 65, 72), 1, cv2.LINE_AA)
+    # Plot.
+    n = len(profile)
+    if n < 2:
+        ok, png = cv2.imencode(".png", img)
+        if not ok:
+            return ""
+        return "data:image/png;base64," + base64.b64encode(png.tobytes()).decode("ascii")
+    pts = []
+    for i, v in enumerate(profile):
+        px = int(round(i * (width_px - 1) / (n - 1)))
+        py = int(round((1.0 - max(0.0, min(1023.0, v)) / 1023.0)
+                       * (height_px - 1)))
+        pts.append((px, py))
+    color = (140, 200, 240) if polarity > 0 else (240, 160, 140)
+    for a, b in zip(pts[:-1], pts[1:]):
+        cv2.line(img, a, b, color, 1, cv2.LINE_AA)
+    # Mark BLACK_Y10 as a thin dashed line.
+    bky = int(round((1.0 - tp_chart.BLACK_Y10 / 1023.0) * (height_px - 1)))
+    for x in range(0, width_px, 4):
+        img[bky, x:x + 2] = (40, 70, 100)
+    ok, png = cv2.imencode(".png", img)
+    if not ok:
+        return ""
+    return "data:image/png;base64," + base64.b64encode(png.tobytes()).decode("ascii")
+
+
+def render_pulse_overview(captures: List[Dict[str, Any]]) -> str:
+    head = (
+        "<tr>"
+        + _sortable_th("Capture",
+                       "Capture file name.", kind="text")
+        + _sortable_th("WoB FWHM (ns)",
+                       "Half-amplitude width of the white-on-black 2T "
+                       "pulse, in nanoseconds. The chart spec is "
+                       "200 ns (2T at 13.5 MHz NTSC SDI). Higher = the "
+                       "decoder has broadened the pulse (luma-bandwidth "
+                       "shortfall).")
+        + _sortable_th("BoW FWHM (ns)",
+                       "Same metric on the black-on-white pulse. "
+                       "Asymmetry vs WoB is a clue to non-linear "
+                       "transient response.")
+        + _sortable_th("WoG ringing %",
+                       "Max signed ringing on the white-on-grey pulse, "
+                       "as a percent of the pulse amplitude. Positive = "
+                       "overshoot in the same direction as the pulse; "
+                       "negative = undershoot. Lower magnitude is better.")
+        + _sortable_th("WoG echo %",
+                       "Largest delayed copy of the pulse 15–25 px "
+                       "downstream (a sign of multipath / filter "
+                       "ringing). 0 = no echo.")
+        + _sortable_th("Black clipper",
+                       "Black-clipper detected on the WoB cell's "
+                       "background: True = decoder pins values at Y=64 "
+                       "and rejects footroom; False = footroom is "
+                       "passed through.")
+        + "</tr>"
+    )
+    rows = []
+    for c in captures:
+        name = _basename(c["_meta"]["capture"])
+        s = (_pulse_data(c).get("summary") or {})
+        wob_fwhm = s.get("wob_fwhm_ns")
+        bow_fwhm = s.get("bow_fwhm_ns")
+        wog_ring = s.get("wog_ringing_pct")
+        wog_echo = s.get("wog_echo_pct")
+        clip = s.get("black_clipper_present")
+        clip_str = (
+            "—" if clip is None
+            else ("yes" if clip else "no")
+        )
+        clip_class = ("" if clip is None
+                      else ("delta-bad" if clip else "delta-good"))
+        cells = [
+            _td_name(name),
+            _td_num(wob_fwhm, "{:.0f}", cls=_fwhm_class(wob_fwhm)),
+            _td_num(bow_fwhm, "{:.0f}", cls=_fwhm_class(bow_fwhm)),
+            _td_num(wog_ring, "{:+.2f}", cls=_ringing_class(wog_ring)),
+            _td_num(wog_echo, "{:.2f}",  cls=_echo_class(wog_echo)),
+            f'<td class="numeric {clip_class}" data-v="{0 if clip else 1}">'
+            f'{clip_str}</td>',
+        ]
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"""
+<section class="overview">
+  <h2>Pulse-and-Bar Overview</h2>
+  <p class="legend">
+    Per-capture summary of the three 2T pulse-and-bar cells on the
+    right edge of the chart. Chart spec is 200 ns FWHM (2T at NTSC
+    13.5 MHz SDI). The WoG cell is the primary ringing/echo probe;
+    the WoB cell's background tells us whether the decoder allows
+    SDI footroom (Y &lt; 64) or clips at the pedestal.
+  </p>
+  <table class="overview-table">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
+def _pulse_verdict(r):
+    fwhm = r.get("fwhm_ns")
+    ring = r.get("max_ringing_pct")
+    echo = r.get("echo_pct")
+    parts = []
+    if fwhm is None:
+        parts.append("FWHM not measured")
+    else:
+        ideal = _ideal_2t_fwhm_ns()
+        if abs(fwhm - ideal) < 30:
+            parts.append(f"sharp ({fwhm:.0f} ns ≈ 2T)")
+        elif fwhm > ideal:
+            parts.append(f"broadened to {fwhm:.0f} ns "
+                         f"({fwhm - ideal:+.0f} ns vs ideal)")
+        else:
+            parts.append(f"sharper than 2T ({fwhm:.0f} ns)")
+    if ring is not None and abs(ring) >= 2:
+        if ring > 0:
+            parts.append(f"overshoot {ring:.1f}%")
+        else:
+            parts.append(f"undershoot {ring:.1f}%")
+    if echo is not None and echo >= 2:
+        parts.append(f"echo {echo:.1f}%")
+    return "; ".join(parts) if parts else "—"
+
+
+def _render_pulse_panel(c: Dict[str, Any]) -> str:
+    cap_name = _basename(c["_meta"]["capture"])
+    rows_html = []
+    clip_text = ""
+    for rid in _PULSE_ORDER:
+        r = _pulse_region_by_id(c, rid)
+        label = PULSE_LABELS[rid]
+        if r is None or "error" in r:
+            rows_html.append(
+                f"<tr><td class='name'>{_h.escape(label)}</td>"
+                f"<td colspan='6' class='muted small'>"
+                f"{_h.escape(r['error'] if r else 'not measured')}</td>"
+                f"</tr>"
+            )
+            continue
+        profile = r.get("profile") or []
+        polarity = +1 if "amplitude_y10" in r and r["amplitude_y10"] > 0 else -1
+        spark = _profile_to_png_data_url(
+            profile,
+            baseline_y10=r.get("background_y10", 64.0),
+            peak_y10=r.get("peak_y10", 940.0),
+            polarity=polarity,
+        )
+        fwhm_ns = r.get("fwhm_ns")
+        ring = r.get("max_ringing_pct")
+        echo = r.get("echo_pct")
+        amp = r.get("amplitude_abs_y10")
+        amp_pct = r.get("amplitude_pct_full_scale")
+        rows_html.append(
+            f"<tr>"
+            f"<td class='name'>{_h.escape(label)}</td>"
+            f"<td class='swatch-cell'>"
+            f"<img class='pulse-spark' src='{spark}' alt='{rid} profile'/>"
+            f"</td>"
+            f"<td class='delta'>{r.get('background_y10', 0.0):.0f} → "
+            f"{r.get('peak_y10', 0.0):.0f} "
+            f"<span class='muted small'>({amp_pct:.0f}% of full)</span></td>"
+            f"<td class='delta {_fwhm_class(fwhm_ns)}'>"
+            f"{('—' if fwhm_ns is None else f'{fwhm_ns:.0f} ns')}</td>"
+            f"<td class='delta {_ringing_class(ring)}'>"
+            f"{('—' if ring is None else f'{ring:+.1f}%')}</td>"
+            f"<td class='delta {_echo_class(echo)}'>"
+            f"{('—' if echo is None else f'{echo:.1f}%')}</td>"
+            f"<td class='verdict'>{_h.escape(_pulse_verdict(r))}</td>"
+            f"</tr>"
+        )
+        if rid == "PULSE_WOB" and r.get("clip"):
+            clip = r["clip"]
+            min_bg = clip.get("min_background_y10")
+            n_below = clip.get("below_black_pixels")
+            n_total = clip.get("background_pixels")
+            clip_present = clip.get("clip_present")
+            if clip_present:
+                clip_text = (
+                    "<p class='legend'>"
+                    "<b>Black clipper detected.</b> Background pixels on "
+                    "the WoB cell are pinned at Y10 ≥ "
+                    f"{tp_chart.BLACK_Y10} with no footroom samples — "
+                    "ringing that should dip below pedestal is being "
+                    "clamped at black. Min Y10 observed: "
+                    f"<b>{(min_bg if min_bg is not None else float('nan')):.0f}</b>."
+                    "</p>"
+                )
+            else:
+                clip_text = (
+                    "<p class='legend'>"
+                    f"<b>No black clipper.</b> {n_below}/{n_total} "
+                    "background pixels sit in SDI footroom "
+                    f"(Y10 &lt; {tp_chart.BLACK_Y10}); min Y10 = "
+                    f"<b>{(min_bg if min_bg is not None else float('nan')):.0f}</b>. "
+                    "Undershoots from pulse ringing are allowed to fall "
+                    "below pedestal."
+                    "</p>"
+                )
+
+    return (
+        f"<div class='color-panel'>"
+        f"<h3>{_h.escape(cap_name)}</h3>"
+        f"<table class='color-table pulse-table'>"
+        f"<tr>{_th('Pulse', 'Which pulse-and-bar cell. White-on-black tests the rising edge response and black-clipper behavior; black-on-white tests the falling edge; white-on-grey is the primary ringing/echo probe (background sits between black and white so symmetric ringing on either side is detectable).')}"
+        f"{_th('Profile', '1D luma profile across the pulse, with the cell background drawn as the horizontal line and the BLACK_Y10 pedestal as a dashed reference. X axis = sample number.')}"
+        f"{_th('Levels (Y10)', 'Measured background and peak pulse values in 10-bit luma codes, plus pulse amplitude as a percent of the chart full-contrast swing.')}"
+        f"{_th('FWHM', 'Full width at half-maximum of the pulse, in nanoseconds. Chart spec = 200 ns (2T).')}"
+        f"{_th('Ringing', 'Largest signed overshoot/undershoot adjacent to the pulse (3–12 px from center), as a percent of pulse amplitude.')}"
+        f"{_th('Echo', 'Largest deviation 15–25 px from the pulse center — a check for delayed copies of the pulse (filter / multipath echo).')}"
+        f"{_th('Verdict', 'Plain-language summary.')}"
+        f"</tr>"
+        + "".join(rows_html) +
+        f"</table>"
+        f"{clip_text}"
+        f"</div>"
+    )
+
+
+def render_pulse_panels(captures: List[Dict[str, Any]]) -> str:
+    if not any(c.get("pulse_response") for c in captures):
+        return ""
+    panels = [_render_pulse_panel(c) for c in captures]
+    intro = """
+<p class="legend">
+  Three pulse-and-bar test cells on the right edge of the chart at
+  column 12, rows 4 / 5 / 6 (just to the right of the frequency
+  wedge):
+  <ul class="legend">
+    <li><b>White pulse on black</b> — exercises a sharp positive
+    transient against a quiet background. The black-background area
+    around the pulse also lets us detect whether the equipment has a
+    <b>black clipper</b>.</li>
+    <li><b>Black pulse on white</b> — the mirror test. Asymmetry vs
+    the WoB pulse signals non-linear transient response.</li>
+    <li><b>White pulse on 20%-grey</b> — the primary ringing/echo
+    probe. The mid-grey background allows symmetric overshoot or
+    undershoot on either side of the pulse to be measured cleanly,
+    without saturation against the rail.</li>
+  </ul>
+</p>
+<p class="legend">
+  <b>About SDI "below black":</b> Each pulse is a sin²-shaped 2T
+  pulse (≈ 200 ns FWHM at 13.5 MHz NTSC SDI). 10-bit limited-range
+  SDI legally carries Y values from 1 to 1019; codes 1..63 are
+  footroom (below the pedestal at Y=64), and ringing or undershoot
+  on a sharp transition can legitimately fall into this range. A
+  decoder with a black clipper clamps everything at Y=64, masking
+  whatever distortion lives below pedestal. The WoB cell's
+  background — far from the pulse — should sit at or near Y=64; if
+  the captured chart's black pixels show <i>no</i> footroom samples
+  AND sit exactly at the pedestal, a black clipper is in play.
+</p>
+"""
+    return f"""
+<section class="pulse-panels">
+  <h2>Pulse-and-Bar — per capture</h2>
+  {intro}
+  {''.join(panels)}
 </section>
 """
 
@@ -2041,6 +2418,9 @@ table.overview-table tbody tr:nth-child(odd) { background: rgba(255,255,255,0.01
     background: #14161a; max-height: 540px; }
 .wedge-fig figcaption { font-size: 11px; color: #b8c0cc; margin-top: 4px; max-width: 280px; }
 .wedge-synth-fig { display: inline-block; margin: 0 12px 12px 0; }
+.pulse-table img.pulse-spark { display: block; border: 1px solid #2a2e36;
+    image-rendering: pixelated; background: #14161a; height: 80px; width: 240px; }
+.pulse-table td.swatch-cell { width: 244px; }
 """
 
 
@@ -2766,6 +3146,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_frequency_response_overview(captures)
         + render_frequency_wedge_overview(captures)
         + render_chroma_staircase_overview(captures)
+        + render_pulse_overview(captures)
     )
     details = (
         render_geometry_section(captures)
@@ -2774,6 +3155,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_frequency_response_section(captures)
         + render_frequency_wedge_section(captures)
         + render_chroma_staircase_panels(captures)
+        + render_pulse_panels(captures)
         + render_luma_scale_analysis(captures)
         + render_artifacts(captures)
         + render_radial_wedge(captures)

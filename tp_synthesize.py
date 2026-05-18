@@ -155,6 +155,45 @@ def _draw_chroma_bursts(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> None:
         V[y:y + h, x // 2:(x + w) // 2] = stripe_v[None, :]
 
 
+def _draw_pulse_cells(Y: np.ndarray) -> None:
+    """Render the 3 pulse-and-bar cells on the right edge of the chart.
+    Each cell is filled with its background level and a sin²-shaped 2T
+    pulse is overlaid at the chart-spec center."""
+    for r in tp_chart.PULSE_REGIONS:
+        x, y, w, h = r["cell_box"]
+        bg = int(round(r["background_y10"]))
+        peak = float(r["pulse_peak_y10"])
+        cx, _ = r["pulse_center_xy"]
+        fwhm = float(r["pulse_fwhm_px"])
+        Y[y:y + h, x:x + w] = bg
+        # sin² pulse: amplitude(dx) = cos²(π/2 * dx/fwhm) for |dx| ≤ fwhm.
+        # Past ±fwhm the pulse is clamped to zero so the cell is purely
+        # background outside the pulse footprint.
+        radius = int(np.ceil(fwhm)) + 1
+        xs = np.arange(cx - radius, cx + radius + 1, dtype=np.float32)
+        deltas = xs - cx
+        env = np.where(
+            np.abs(deltas) <= fwhm,
+            np.cos(np.pi / 2.0 * deltas / fwhm) ** 2,
+            0.0,
+        )
+        delta_amp = peak - r["background_y10"]
+        pulse_y10 = bg + (delta_amp * env)
+        pulse_y10 = np.clip(pulse_y10, 0, 1023).astype(np.uint16)
+        x0 = int(xs[0]); x1 = int(xs[-1]) + 1
+        # Clip to the cell horizontal bounds so a pulse near the cell
+        # edge doesn't spill into neighboring cells.
+        cell_x0 = x
+        cell_x1 = x + w
+        seg_x0 = max(x0, cell_x0)
+        seg_x1 = min(x1, cell_x1)
+        if seg_x1 <= seg_x0:
+            continue
+        seg_off = seg_x0 - x0
+        seg_len = seg_x1 - seg_x0
+        Y[y:y + h, seg_x0:seg_x1] = pulse_y10[seg_off:seg_off + seg_len]
+
+
 def _draw_wedge_column(Y: np.ndarray) -> None:
     """Render the continuous frequency wedge in column 10. Local
     frequency rises linearly from tp_chart.WEDGE_COLUMN['freq_top'] to
@@ -275,6 +314,7 @@ def synthesize(width: int = 720, height: int = 486) -> Tuple[np.ndarray, np.ndar
     _draw_tartan(Y, U, V)
     _draw_gray_strip(Y, U, V)
     _draw_wedge_column(Y)
+    _draw_pulse_cells(Y)
     _draw_bursts(Y)
     _draw_saturated_chroma_blocks(Y, U, V)
     _draw_chroma_bursts(Y, U, V)

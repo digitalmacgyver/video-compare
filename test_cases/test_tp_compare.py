@@ -706,6 +706,145 @@ def test_measure_chroma_staircase_on_synth_is_linear():
     assert s["luma_linearity_r2"] > 0.99
 
 
+def _make_capture_with_pulses(tag, *, wog_ringing=2.5, clip=False,
+                              fwhm_ns=205.0):
+    c = _make_capture_json_with_geometry(tag)
+    def _profile_for(label, polarity, bg, pk):
+        # Quick-and-dirty fake profile centred around index 15.
+        prof = [bg] * 30
+        prof[14] = bg + (pk - bg) * 0.25
+        prof[15] = pk
+        prof[16] = bg + (pk - bg) * 0.25
+        return prof
+    c["pulse_response"] = {
+        "regions": [
+            {"id": "PULSE_WOB", "kind": "pulse_white_on_black",
+             "background_y10": 60.0, "peak_y10": 925.0,
+             "amplitude_y10": 865.0, "amplitude_abs_y10": 865.0,
+             "amplitude_pct_full_scale": 98.7,
+             "fwhm_px": 2.77, "fwhm_ns": fwhm_ns,
+             "pre_ringing_pct": 0.5, "post_ringing_pct": -1.4,
+             "max_ringing_pct": 1.4, "echo_left_y10": 1.0,
+             "echo_right_y10": 1.0, "echo_pct": 0.12,
+             "clip": {"min_background_y10": (64.0 if clip else 4.0),
+                      "background_pixels": 50,
+                      "below_black_pixels": (0 if clip else 49),
+                      "at_pedestal_pixels": (45 if clip else 1),
+                      "clip_present": clip},
+             "profile": _profile_for("WoB", +1, 60.0, 925.0),
+             "profile_x": list(range(30))},
+            {"id": "PULSE_BOW", "kind": "pulse_black_on_white",
+             "background_y10": 920.0, "peak_y10": 70.0,
+             "amplitude_y10": -850.0, "amplitude_abs_y10": 850.0,
+             "amplitude_pct_full_scale": 97.0,
+             "fwhm_px": 3.05, "fwhm_ns": 226.0,
+             "pre_ringing_pct": -0.3, "post_ringing_pct": 2.0,
+             "max_ringing_pct": 2.0, "echo_left_y10": 1.0,
+             "echo_right_y10": 1.0, "echo_pct": 1.2,
+             "clip": None,
+             "profile": _profile_for("BoW", -1, 920.0, 70.0),
+             "profile_x": list(range(30))},
+            {"id": "PULSE_WOG", "kind": "pulse_white_on_grey",
+             "background_y10": 234.0, "peak_y10": 920.0,
+             "amplitude_y10": 686.0, "amplitude_abs_y10": 686.0,
+             "amplitude_pct_full_scale": 78.3,
+             "fwhm_px": 3.35, "fwhm_ns": 248.0,
+             "pre_ringing_pct": -0.2, "post_ringing_pct": wog_ringing,
+             "max_ringing_pct": wog_ringing, "echo_left_y10": 0.5,
+             "echo_right_y10": 0.7, "echo_pct": 0.27,
+             "clip": None,
+             "profile": _profile_for("WoG", +1, 234.0, 920.0),
+             "profile_x": list(range(30))},
+        ],
+        "summary": {
+            "wob_fwhm_ns": fwhm_ns,
+            "bow_fwhm_ns": 226.0,
+            "wog_fwhm_ns": 248.0,
+            "wog_ringing_pct": wog_ringing,
+            "wog_echo_pct": 0.27,
+            "black_clipper_present": clip,
+        },
+    }
+    return c
+
+
+def test_pulse_overview_lists_capture_and_metrics():
+    a = _make_capture_with_pulses("alpha")
+    html = tp_compare.render_pulse_overview([a])
+    assert "Pulse-and-Bar Overview" in html
+    assert "WoB FWHM" in html and "WoG ringing" in html
+    assert "alpha.mov" in html
+    # FWHM value
+    assert "205" in html
+    # Clip column shows "no" for a clean signal
+    assert ">no<" in html
+
+
+def test_pulse_panel_shows_three_rows_and_profile_thumbnail():
+    a = _make_capture_with_pulses("alpha")
+    html = tp_compare.render_pulse_panels([a])
+    assert "Pulse-and-Bar — per capture" in html
+    assert "alpha.mov" in html
+    for label in ("White pulse on black", "Black pulse on white",
+                  "White pulse on 20% grey"):
+        assert label in html
+    # Profile thumbnail
+    assert "pulse-spark" in html
+    assert "data:image/png;base64," in html
+    # No clipper → footroom note
+    assert "No black clipper" in html
+
+
+def test_pulse_panel_flags_black_clipper_when_present():
+    a = _make_capture_with_pulses("alpha", clip=True)
+    html = tp_compare.render_pulse_panels([a])
+    assert "Black clipper detected" in html
+
+
+def test_score_pulse_clean_signal_high():
+    a = _make_capture_with_pulses("alpha", wog_ringing=2.5, fwhm_ns=205.0)
+    score = tp_compare._score_pulse(a)
+    assert score >= 90, f"clean pulse-and-bar scored {score}"
+
+
+def test_score_pulse_heavy_ringing_low():
+    a = _make_capture_with_pulses("alpha", wog_ringing=20.0)
+    score = tp_compare._score_pulse(a)
+    assert score <= 80, f"20% ringing scored {score}"
+
+
+def test_score_pulse_clip_present_lowers():
+    a_clean = _make_capture_with_pulses("alpha", clip=False)
+    a_clip  = _make_capture_with_pulses("beta",  clip=True)
+    s_clean = tp_compare._score_pulse(a_clean)
+    s_clip  = tp_compare._score_pulse(a_clip)
+    assert s_clean - s_clip >= 9
+
+
+def test_overall_summary_includes_pulse_column():
+    a = _make_capture_with_pulses("alpha")
+    html = tp_compare.render_overall_summary([a])
+    assert ">Pulse<" in html
+
+
+def test_measure_pulse_response_on_synth_is_clean():
+    """End-to-end: synth → measure_pulse_response gives ~200 ns FWHM
+    on the WoB pulse and very low ringing."""
+    import tp_synthesize, tp_register, tp_measure
+    Y, U, V = tp_synthesize.synthesize()
+    M = tp_register.register(Y)["affine_matrix"]
+    if M is None:
+        return
+    import numpy as np
+    res = tp_measure.measure_pulse_response(Y, U, V,
+                                            np.asarray(M, dtype=np.float32))
+    s = res["summary"]
+    assert s["wob_fwhm_ns"] is not None
+    assert abs(s["wob_fwhm_ns"] - 200.0) < 40
+    # Clean synth → ringing < 5%.
+    assert abs(s["wog_ringing_pct"] or 0.0) < 5.0
+
+
 def test_render_page_places_registration_summary_in_appendix():
     a = _make_capture_json_with_geometry("alpha")
     b = _make_capture_json_with_geometry("beta")
@@ -749,6 +888,14 @@ TESTS_NO_TMPDIR = [
     test_score_chroma_staircase_phase_drift_lowers,
     test_chroma_staircase_score_in_overall_summary,
     test_measure_chroma_staircase_on_synth_is_linear,
+    test_pulse_overview_lists_capture_and_metrics,
+    test_pulse_panel_shows_three_rows_and_profile_thumbnail,
+    test_pulse_panel_flags_black_clipper_when_present,
+    test_score_pulse_clean_signal_high,
+    test_score_pulse_heavy_ringing_low,
+    test_score_pulse_clip_present_lowers,
+    test_overall_summary_includes_pulse_column,
+    test_measure_pulse_response_on_synth_is_clean,
     test_render_page_places_registration_summary_in_appendix,
 ]
 TESTS_TMPDIR = [test_compare_cli_writes_html]

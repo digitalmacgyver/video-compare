@@ -500,6 +500,69 @@ def _build_chroma_staircase_regions():
 CHROMA_STAIRCASE_REGIONS = _build_chroma_staircase_regions()
 
 
+# =====================================================================
+# 2T PULSE-AND-BAR REGIONS (cells 4..6, 12)
+# =====================================================================
+#
+# Three pulse-and-bar test cells on the right-hand edge of the chart:
+#   (4,12): narrow white pulse on a black background.
+#   (5,12): narrow black pulse on a white background.
+#   (6,12): narrow white pulse on a 20%-IRE grey background.
+#
+# Each pulse is a sin²-shaped 2T pulse (~200 ns @ 13.5 MHz NTSC SDI),
+# centered horizontally at x≈686 inside the cell. FWHM ≈ 2.76 px ≈ 2T.
+#
+# These pulses test:
+#   - Transient (high-frequency) response (the FWHM of the pulse tells
+#     you how much the decoder broadens it relative to the chart).
+#   - Ringing / overshoot / undershoot around the pulse (artifacts of
+#     sharpening or peaking circuits).
+#   - Echoes (delayed copies of the pulse from multipath or filter
+#     ringing).
+#   - On the black-background pulse: whether the equipment uses a
+#     "black clipper" that clamps below-pedestal undershoots at Y=64.
+#     SDI rasters legally carry Y10 values in the 1..63 footroom range,
+#     so a properly transparent processor will let ringing fall into
+#     footroom; one with a black clipper will pin everything at 64.
+#
+# The pulse-center x=686 was operator-verified against the snellhd
+# capture (peak Y10≈926, FWHM ≈ 2.76 px, half-amplitude crossings at
+# x≈684.6 and x≈687.3).
+
+NTSC_PULSE_2T_FWHM_PX = 2.7  # 200 ns FWHM @ 13.5 MHz
+
+_PULSE_RAW = [
+    # (id,           kind,                       cell_y_top, bg_y10,                   peak_y10,    pulse_polarity)
+    ("PULSE_WOB",    "pulse_white_on_black",     162,        BLACK_Y10,                WHITE_Y10,   +1),
+    ("PULSE_BOW",    "pulse_black_on_white",     216,        WHITE_Y10,                BLACK_Y10,   -1),
+    ("PULSE_WOG",    "pulse_white_on_grey",      270,        GRAY_IDEAL_Y10[0],        WHITE_Y10,   +1),
+]
+
+
+PULSE_REGIONS = [
+    {
+        "id":              rid,
+        "kind":            kind,
+        "cell_box":        (660, cell_y_top, 60, 54),
+        "background_y10":  float(bg),
+        "pulse_peak_y10":  float(peak),
+        "pulse_polarity":  int(pol),
+        # Center y is the middle row of the cell; pulse runs along x.
+        "pulse_center_xy": (686, cell_y_top + 27),
+        "pulse_fwhm_px":   NTSC_PULSE_2T_FWHM_PX,
+        # Sample window: a horizontal strip centered on the pulse,
+        # 60 px wide × 20 px tall (averaged vertically for noise).
+        "sample_strip":    {
+            "x":      660,
+            "y":      cell_y_top + 27 - 10,
+            "width":  60,
+            "height": 20,
+        },
+    }
+    for rid, kind, cell_y_top, bg, peak, pol in _PULSE_RAW
+]
+
+
 BURST_REGIONS = [
     {
         "id":            rid,
