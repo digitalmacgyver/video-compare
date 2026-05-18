@@ -950,6 +950,103 @@ def test_measure_radial_wedge_on_synth_resolves_pattern():
     assert rl["tvl"] is not None and rl["tvl"] > 200, rl
 
 
+def _make_capture_with_yc_timing(tag, *, mean_wiggle=0.04,
+                                 max_wiggle=0.23, f3db=1.5):
+    c = _make_capture_json_with_geometry(tag)
+    regs = []
+    for rid, freq, chroma in [
+        ("YC_BURST_0p5MHZ", 0.5, 5.5),
+        ("YC_BURST_1p0MHZ", 1.0, 5.5),
+        ("YC_BURST_1p5MHZ", 1.5, 6.3),
+    ]:
+        regs.append({
+            "id": rid, "frequency_MHz": freq,
+            "n_frames": 3,
+            "per_frame": [
+                {"chroma_modulation_pct": chroma, "luma_dot_crawl_pct": 20.0,
+                 "chroma_snr_db": 12.0},
+                {"chroma_modulation_pct": chroma + 0.1, "luma_dot_crawl_pct": 20.1,
+                 "chroma_snr_db": 12.0},
+                {"chroma_modulation_pct": chroma - 0.1, "luma_dot_crawl_pct": 19.9,
+                 "chroma_snr_db": 12.0},
+            ],
+            "chroma_modulation_pct": chroma,
+            "luma_dot_crawl_pct":    20.0,
+            "dot_crawl_wiggle_pct":  mean_wiggle * (freq / 1.0),
+            "dot_crawl_wiggle_max_pct": max_wiggle * (freq / 1.0),
+            "sample_box_capture": [252, 446, 36, 28],
+        })
+    c["yc_timing"] = {
+        "regions": regs,
+        "summary": {
+            "frames_used": 3,
+            "chroma_minus_3db_MHz": f3db,
+            "chroma_minus_6db_MHz": 1.5,
+            "mean_dot_crawl_wiggle_pct": mean_wiggle,
+            "max_dot_crawl_wiggle_pct":  max_wiggle,
+        },
+    }
+    return c
+
+
+def test_yc_timing_overview_lists_capture_and_metrics():
+    a = _make_capture_with_yc_timing("alpha")
+    html = tp_compare.render_yc_timing_overview([a])
+    assert "Y/C Timing Overview" in html
+    assert "Mean dot-crawl wiggle" in html
+    assert "Chroma -3 dB" in html
+    assert "alpha.mov" in html
+
+
+def test_yc_timing_panel_shows_three_bursts_and_summary():
+    a = _make_capture_with_yc_timing("alpha", mean_wiggle=0.04,
+                                     max_wiggle=0.23, f3db=1.5)
+    html = tp_compare.render_yc_timing_panels([a])
+    assert "Y/C Timing — dot-crawl wiggle" in html
+    assert "alpha.mov" in html
+    # 3 burst labels
+    assert "0.5 MHz" in html and "1.0 MHz" in html and "1.5 MHz" in html
+    # Multi-frame phrasing in the intro
+    assert "Frames analysed" in html
+    # Verdict on clean signal
+    assert "no detectable dot-crawl wiggle" in html
+
+
+def test_yc_timing_panel_flags_heavy_wiggle():
+    a = _make_capture_with_yc_timing("alpha", mean_wiggle=3.0,
+                                     max_wiggle=15.0)
+    html = tp_compare.render_yc_timing_panels([a])
+    assert "heavy dot-crawl wiggle" in html
+
+
+def test_score_yc_timing_clean_signal_high():
+    a = _make_capture_with_yc_timing("alpha", mean_wiggle=0.04,
+                                     max_wiggle=0.23, f3db=1.5)
+    score = tp_compare._score_yc_timing(a)
+    assert score >= 90, f"clean YC scored {score}"
+
+
+def test_score_yc_timing_heavy_wiggle_lowers():
+    a_clean = _make_capture_with_yc_timing("a", mean_wiggle=0.04)
+    a_dirty = _make_capture_with_yc_timing("b", mean_wiggle=2.0,
+                                            max_wiggle=15.0)
+    delta = tp_compare._score_yc_timing(a_clean) - tp_compare._score_yc_timing(a_dirty)
+    assert delta >= 50
+
+
+def test_score_yc_timing_narrow_chroma_lowers():
+    a_wide   = _make_capture_with_yc_timing("a", f3db=1.5)
+    a_narrow = _make_capture_with_yc_timing("b", f3db=0.6)
+    delta = tp_compare._score_yc_timing(a_wide) - tp_compare._score_yc_timing(a_narrow)
+    assert delta >= 10
+
+
+def test_overall_summary_includes_yc_column():
+    a = _make_capture_with_yc_timing("alpha")
+    html = tp_compare.render_overall_summary([a])
+    assert ">Y/C<" in html
+
+
 def test_render_page_places_registration_summary_in_appendix():
     a = _make_capture_json_with_geometry("alpha")
     b = _make_capture_json_with_geometry("beta")
@@ -1008,6 +1105,13 @@ TESTS_NO_TMPDIR = [
     test_score_radial_wedge_cross_color_lowers,
     test_overall_summary_includes_wedge_column,
     test_measure_radial_wedge_on_synth_resolves_pattern,
+    test_yc_timing_overview_lists_capture_and_metrics,
+    test_yc_timing_panel_shows_three_bursts_and_summary,
+    test_yc_timing_panel_flags_heavy_wiggle,
+    test_score_yc_timing_clean_signal_high,
+    test_score_yc_timing_heavy_wiggle_lowers,
+    test_score_yc_timing_narrow_chroma_lowers,
+    test_overall_summary_includes_yc_column,
     test_render_page_places_registration_summary_in_appendix,
 ]
 TESTS_TMPDIR = [test_compare_cli_writes_html]

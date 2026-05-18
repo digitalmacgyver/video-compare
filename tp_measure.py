@@ -838,6 +838,141 @@ def measure_radial_wedge(Y, U, V, affine) -> Dict[str, Any]:
     }
 
 
+YC_TIMING_BURST_IDS = ("YC_BURST_0p5MHZ", "YC_BURST_1p0MHZ",
+                       "YC_BURST_1p5MHZ")
+
+
+def measure_yc_timing(capture_path: str, frame_index: int,
+                      affine, n_frames: int = 3) -> Dict[str, Any]:
+    """Sample the three YC chroma bursts across `n_frames` successive
+    frames and produce the metrics the report needs:
+
+      - Per-burst single-frame chroma magnitude (the existing tp_freq
+        measurement, re-evaluated locally so we get the same numbers
+        on every frame).
+      - Per-burst dot-crawl wiggle = mean pixel-wise std-dev of Y
+        across the N frames inside the burst box. A decoder that
+        injects SC-phase-locked cross-luma at chroma transitions
+        produces a "dot crawl" pattern that advances ≈ 162° per
+        frame on NTSC, so the same pixel oscillates frame-to-frame.
+        Static patterns give a near-zero std.
+      - Chroma rolloff (-3 dB / -6 dB) interpolated from the 0.5 /
+        1.0 / 1.5 MHz chroma magnitudes (proxy for chroma bandwidth).
+
+    Uses the same affine for all frames — the SW2 chart is static
+    across the few-frame window we sample, and the YC region sits in
+    the chart interior where any sub-frame jitter is negligible.
+    """
+    import math
+    import tp_freq
+    frames = []
+    for delta in range(n_frames):
+        try:
+            Y_raw, U_raw, V_raw, _ = extract_frame(capture_path,
+                                                   frame_index + delta)
+            Yp, Up, Vp, _ = pad_to_486(Y_raw, U_raw, V_raw)
+            frames.append((Yp, Up, Vp))
+        except Exception:
+            break
+    if not frames:
+        return {"regions": [], "summary": {}}
+
+    contrast = float(tp_chart.WHITE_Y10 - tp_chart.BLACK_Y10)
+    regions_out = []
+    chroma_curve = []   # (freq_MHz, chroma_modulation_pct from frame 0)
+    for rid in YC_TIMING_BURST_IDS:
+        region_spec = next(r for r in tp_chart.BURST_REGIONS if r["id"] == rid)
+        box_ideal = region_spec["ideal_box"]
+        box_cap = tp_freq._sample_box_capture(affine, box_ideal)
+        per_frame = []
+        y_crops = []
+        for Y, U, V in frames:
+            entry = tp_freq._measure_chroma_burst(region_spec, Y, U, V, box_cap)
+            per_frame.append({
+                "chroma_modulation_pct": entry["chroma_modulation_pct"],
+                "luma_dot_crawl_pct":    entry["luma_dot_crawl_pct"],
+                "chroma_snr_db":         entry["chroma_snr_db"],
+            })
+            x, y, w, h = box_cap
+            x0 = max(0, x); y0 = max(0, y)
+            x1 = min(Y.shape[1], x + w); y1 = min(Y.shape[0], y + h)
+            if x1 > x0 and y1 > y0:
+                y_crops.append(Y[y0:y1, x0:x1].astype(np.float64))
+        # Dot-crawl wiggle: pixel-wise std across frames.
+        wiggle_pct = None
+        wiggle_max_pct = None
+        if len(y_crops) >= 2:
+            # All crops must have the same shape (same affine, same box).
+            shape = y_crops[0].shape
+            if all(c.shape == shape for c in y_crops):
+                stack = np.stack(y_crops, axis=0)
+                per_pixel_std = stack.std(axis=0)
+                wiggle_mean = float(per_pixel_std.mean())
+                wiggle_max  = float(per_pixel_std.max())
+                wiggle_pct     = float(wiggle_mean / contrast * 100.0)
+                wiggle_max_pct = float(wiggle_max  / contrast * 100.0)
+        # Frame 0 numbers serve as the single-frame headline value;
+        # the per_frame list keeps the raw per-frame data for the panel.
+        chroma_mod_f0 = per_frame[0]["chroma_modulation_pct"]
+        dot_crawl_f0  = per_frame[0]["luma_dot_crawl_pct"]
+        regions_out.append({
+            "id":              rid,
+            "frequency_MHz":   region_spec["frequency_MHz"],
+            "n_frames":        len(frames),
+            "per_frame":       per_frame,
+            "chroma_modulation_pct":     chroma_mod_f0,
+            "luma_dot_crawl_pct":        dot_crawl_f0,
+            "dot_crawl_wiggle_pct":      wiggle_pct,
+            "dot_crawl_wiggle_max_pct":  wiggle_max_pct,
+            "sample_box_capture":        list(box_cap),
+        })
+        chroma_curve.append((region_spec["frequency_MHz"], chroma_mod_f0))
+
+    # Chroma rolloff: take the max chroma % across the curve as the
+    # reference (the chart's chroma bandwidth at the easiest probe);
+    # interpolate to find where the chroma drops to 70.8 % (−3 dB)
+    # or 50 % (−6 dB) of that reference.
+    def _crossing(target_pct):
+        if len(chroma_curve) < 2:
+            return None
+        ref = max(p for _, p in chroma_curve)
+        if ref <= 0:
+            return None
+        thresh = ref * target_pct
+        prev_f, prev_p = chroma_curve[0]
+        if prev_p < thresh:
+            return None
+        for f, p in chroma_curve[1:]:
+            if p < thresh:
+                if p == prev_p:
+                    return float(f)
+                t = (prev_p - thresh) / (prev_p - p)
+                return float(prev_f + t * (f - prev_f))
+            prev_f, prev_p = f, p
+        return float(chroma_curve[-1][0])  # still above threshold at the top
+
+    minus_3db = _crossing(10 ** (-3.0 / 20.0))   # ≈ 0.708
+    minus_6db = _crossing(10 ** (-6.0 / 20.0))   # ≈ 0.501
+
+    # Mean wiggle across the 3 bursts — single composite that fits in
+    # the overall summary table.
+    wiggles = [r["dot_crawl_wiggle_pct"] for r in regions_out
+               if r["dot_crawl_wiggle_pct"] is not None]
+    mean_wiggle = float(sum(wiggles) / len(wiggles)) if wiggles else None
+    max_wiggle  = float(max(wiggles)) if wiggles else None
+
+    return {
+        "regions": regions_out,
+        "summary": {
+            "frames_used":          len(frames),
+            "chroma_minus_3db_MHz": minus_3db,
+            "chroma_minus_6db_MHz": minus_6db,
+            "mean_dot_crawl_wiggle_pct": mean_wiggle,
+            "max_dot_crawl_wiggle_pct":  max_wiggle,
+        },
+    }
+
+
 def measure_pulse_response(Y, U, V, affine) -> Dict[str, Any]:
     """Sample the three 2T pulse cells (white-on-black, black-on-white,
     white-on-grey) and return per-cell amplitude, FWHM, ringing, echo,
@@ -932,6 +1067,7 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
     chroma_staircase = measure_chroma_staircase(Y_p, U_p, V_p, M)
     pulse_response = measure_pulse_response(Y_p, U_p, V_p, M)
     radial_wedge = measure_radial_wedge(Y_p, U_p, V_p, M)
+    yc_timing = measure_yc_timing(capture_path, frame_index, M, n_frames=3)
 
     return {
         "_meta": meta,
@@ -945,6 +1081,7 @@ def measure(capture_path: str, frame_index: int) -> Dict[str, Any]:
         "chroma_staircase":   chroma_staircase,
         "pulse_response":     pulse_response,
         "radial_wedge":       radial_wedge,
+        "yc_timing":          yc_timing,
     }
 
 

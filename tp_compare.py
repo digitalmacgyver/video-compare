@@ -285,6 +285,11 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
                        "(8,11). Penalises resolution shortfall below "
                        "400 TVL, cross-color leak into the luma-only "
                        "wedge, and H/V aperture asymmetry.")
+        + _sortable_th("Y/C",
+                       "0-100 score from the row-9 Y/C-timing chroma "
+                       "bursts sampled across 3 frames. Penalises "
+                       "frame-to-frame dot-crawl wiggle and narrow "
+                       "chroma bandwidth.")
         + _sortable_th("Overall",
                        "Mean of the available category scores.")
         + "</tr>"
@@ -299,7 +304,8 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
         cl = _score_chroma_staircase(c)
         pl = _score_pulse(c)
         rw = _score_radial_wedge(c)
-        vals = [v for v in (g, co, gs, fq, cl, pl, rw)
+        yc = _score_yc_timing(c)
+        vals = [v for v in (g, co, gs, fq, cl, pl, rw, yc)
                 if v is not None and not (isinstance(v, float) and v != v)]
         overall = sum(vals) / len(vals) if vals else float("nan")
         cells = [
@@ -311,6 +317,7 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
             _td_num(cl,      "{:.1f}", cls=_score_class(cl)),
             _td_num(pl,      "{:.1f}", cls=_score_class(pl)),
             _td_num(rw,      "{:.1f}", cls=_score_class(rw)),
+            _td_num(yc,      "{:.1f}", cls=_score_class(yc)),
             _td_num(overall, "{:.1f}", cls=_score_class(overall)),
         ]
         rows.append("<tr>" + "".join(cells) + "</tr>")
@@ -545,6 +552,278 @@ def render_grayscale_overview(captures: List[Dict[str, Any]]) -> str:
     <thead>{head}</thead>
     <tbody>{''.join(rows)}</tbody>
   </table>
+</section>
+"""
+
+
+# ---------------------------------------------------------------------
+# Y/C timing — chroma bursts in row 9 sampled across 3 frames.
+# ---------------------------------------------------------------------
+
+_YC_BURST_LABELS = {
+    "YC_BURST_0p5MHZ": "0.5 MHz (blue / yellow)",
+    "YC_BURST_1p0MHZ": "1.0 MHz (red / cyan)",
+    "YC_BURST_1p5MHZ": "1.5 MHz (red / cyan)",
+}
+
+
+def _yc_timing_data(c: Dict[str, Any]):
+    return c.get("yc_timing") or {}
+
+
+def _wiggle_class(pct):
+    if pct is None:
+        return ""
+    p = abs(pct)
+    if p < 0.5:
+        return "delta-good"
+    if p < 2.0:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def _chroma_bw_class(mhz):
+    if mhz is None:
+        return ""
+    if mhz >= 1.2:
+        return "delta-good"
+    if mhz >= 0.8:
+        return "delta-warn"
+    return "delta-bad"
+
+
+def _score_yc_timing(c: Dict[str, Any]) -> float:
+    """0-100. Penalises high dot-crawl wiggle (frame-to-frame motion
+    of luma artefacts at chroma transitions) and narrow chroma
+    bandwidth (chroma -3 dB frequency well below 1.0 MHz)."""
+    s = (_yc_timing_data(c).get("summary") or {})
+    pen = 0.0
+    wiggle = s.get("mean_dot_crawl_wiggle_pct")
+    if wiggle is not None:
+        pen += _clamp(wiggle * 30.0, 0, 55)
+    max_wiggle = s.get("max_dot_crawl_wiggle_pct")
+    if max_wiggle is not None and max_wiggle > 2.0:
+        pen += _clamp((max_wiggle - 2.0) * 5.0, 0, 15)
+    f3db = s.get("chroma_minus_3db_MHz")
+    if f3db is None:
+        pen += 15
+    elif f3db < 1.0:
+        pen += _clamp((1.0 - f3db) * 30.0, 0, 20)
+    return max(0.0, 100.0 - pen)
+
+
+def render_yc_timing_overview(captures: List[Dict[str, Any]]) -> str:
+    head = (
+        "<tr>"
+        + _sortable_th("Capture",
+                       "Capture file name.", kind="text")
+        + _sortable_th("Mean dot-crawl wiggle %",
+                       "Mean pixel-wise luma std-dev across 3 frames "
+                       "inside the YC chroma bursts, expressed as a "
+                       "percent of the full luma swing. 0 = no "
+                       "frame-to-frame motion; >1 = visible dot crawl "
+                       "shimmering between fields.")
+        + _sortable_th("Max wiggle %",
+                       "Worst-pixel std-dev across 3 frames in any of "
+                       "the bursts — surfaces a hotspot of frame-to-"
+                       "frame motion even when the average is small.")
+        + _sortable_th("Chroma -3 dB (MHz)",
+                       "Highest frequency where the chroma magnitude "
+                       "is still ≥ 70.8 % of its peak across the "
+                       "0.5/1.0/1.5 MHz curve. Higher = wider chroma "
+                       "bandwidth.")
+        + _sortable_th("0.5 MHz chroma %",
+                       "Single-frame chroma modulation at the 0.5 MHz "
+                       "burst (blue/yellow stripes).")
+        + _sortable_th("1.5 MHz chroma %",
+                       "Single-frame chroma modulation at the 1.5 MHz "
+                       "burst (red/cyan stripes).")
+        + "</tr>"
+    )
+    rows = []
+    for c in captures:
+        name = _basename(c["_meta"]["capture"])
+        yc = _yc_timing_data(c)
+        s = (yc.get("summary") or {})
+        by_id = {r["id"]: r for r in (yc.get("regions") or [])}
+        mean_w = s.get("mean_dot_crawl_wiggle_pct")
+        max_w  = s.get("max_dot_crawl_wiggle_pct")
+        f3db   = s.get("chroma_minus_3db_MHz")
+        ch05 = (by_id.get("YC_BURST_0p5MHZ") or {}).get("chroma_modulation_pct")
+        ch15 = (by_id.get("YC_BURST_1p5MHZ") or {}).get("chroma_modulation_pct")
+        cells = [
+            _td_name(name),
+            _td_num(mean_w, "{:.3f}", cls=_wiggle_class(mean_w)),
+            _td_num(max_w,  "{:.2f}", cls=_wiggle_class(max_w)),
+            _td_num(f3db,   "{:.2f}", cls=_chroma_bw_class(f3db)),
+            _td_num(ch05,   "{:.1f}"),
+            _td_num(ch15,   "{:.1f}"),
+        ]
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"""
+<section class="overview">
+  <h2>Y/C Timing Overview</h2>
+  <p class="legend">
+    Headline numbers from the row-9 chroma bursts (blue/yellow at
+    0.5 MHz, red/cyan at 1.0 and 1.5 MHz). The wiggle column is the
+    multi-frame metric — it measures how much luma at chroma
+    transitions oscillates between successive frames, which is
+    exactly the dot-crawl shimmer the test is designed to expose.
+  </p>
+  <table class="overview-table">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
+def _yc_verdict(region) -> str:
+    wiggle = region.get("dot_crawl_wiggle_pct")
+    chroma = region.get("chroma_modulation_pct")
+    parts = []
+    if wiggle is None:
+        parts.append("wiggle not measured")
+    elif wiggle < 0.5:
+        parts.append("no dot-crawl wiggle")
+    elif wiggle < 2.0:
+        parts.append(f"mild wiggle ({wiggle:.2f}%)")
+    else:
+        parts.append(f"heavy wiggle ({wiggle:.2f}%)")
+    if chroma is not None:
+        if chroma >= 30:
+            parts.append("strong chroma")
+        elif chroma >= 5:
+            parts.append("normal chroma")
+        else:
+            parts.append("weak chroma")
+    return "; ".join(parts)
+
+
+def _render_yc_timing_panel(c: Dict[str, Any]) -> str:
+    cap_name = _basename(c["_meta"]["capture"])
+    yc = _yc_timing_data(c)
+    if not yc:
+        return (f"<div class='color-panel'><h3>{_h.escape(cap_name)}</h3>"
+                f"<p class='muted'>no Y/C timing data — re-run "
+                f"tp_measure.</p></div>")
+    summary = yc.get("summary") or {}
+    regions = yc.get("regions") or []
+    n_frames = summary.get("frames_used") or len(regions[0].get("per_frame", [])) if regions else 0
+    rows_html = []
+    for r in regions:
+        label = _YC_BURST_LABELS.get(r["id"], r["id"])
+        chroma = r.get("chroma_modulation_pct")
+        # Per-frame chroma values from the per_frame array.
+        per_frame = r.get("per_frame") or []
+        pf_chroma = ", ".join(f"{pf['chroma_modulation_pct']:.1f}%"
+                              for pf in per_frame)
+        wiggle = r.get("dot_crawl_wiggle_pct")
+        wiggle_max = r.get("dot_crawl_wiggle_max_pct")
+        rows_html.append(
+            f"<tr>"
+            f"<td class='name'>{_h.escape(label)}</td>"
+            f"<td class='delta'>"
+            f"{('—' if chroma is None else f'{chroma:.1f}%')}"
+            f" <span class='muted small'>(per frame: {_h.escape(pf_chroma) or '—'})</span></td>"
+            f"<td class='delta {_wiggle_class(wiggle)}'>"
+            f"{('—' if wiggle is None else f'{wiggle:.3f}%')}</td>"
+            f"<td class='delta {_wiggle_class(wiggle_max)}'>"
+            f"{('—' if wiggle_max is None else f'{wiggle_max:.2f}%')}</td>"
+            f"<td class='verdict'>{_h.escape(_yc_verdict(r))}</td>"
+            f"</tr>"
+        )
+
+    mean_wiggle = summary.get("mean_dot_crawl_wiggle_pct")
+    max_wiggle  = summary.get("max_dot_crawl_wiggle_pct")
+    f3db        = summary.get("chroma_minus_3db_MHz")
+    f6db        = summary.get("chroma_minus_6db_MHz")
+    def _verdict_dot_crawl(w):
+        if w is None: return "—"
+        if w < 0.5:   return "clean — no detectable dot-crawl wiggle"
+        if w < 2.0:   return "mild dot-crawl wiggle"
+        return "heavy dot-crawl wiggle"
+    def _verdict_chroma(f):
+        if f is None: return "—"
+        if f >= 1.2:  return "wide chroma bandwidth"
+        if f >= 0.8:  return "moderate chroma bandwidth"
+        return "narrow chroma bandwidth"
+
+    summary_html = (
+        "<ul class='geo-list'>"
+        f"<li>Frames analysed: <b>{n_frames}</b> "
+        f"<span class='muted'>(consecutive frames starting at the "
+        f"requested frame_index).</span></li>"
+        f"<li>Mean dot-crawl wiggle: "
+        f"<span class='{_wiggle_class(mean_wiggle)}'>"
+        f"{('—' if mean_wiggle is None else f'{mean_wiggle:.3f}%')}</span> "
+        f"— {_h.escape(_verdict_dot_crawl(mean_wiggle))}. "
+        f"<span class='muted'>(peak pixel "
+        f"{('—' if max_wiggle is None else f'{max_wiggle:.2f}%')})</span></li>"
+        f"<li>Chroma <b>-3 dB</b> cutoff: <b>"
+        f"{('not reached in [0.5, 1.5 MHz]' if f3db is None else f'{f3db:.2f} MHz')}</b> "
+        f"— {_h.escape(_verdict_chroma(f3db))}.</li>"
+        f"<li>Chroma <b>-6 dB</b> cutoff: <b>"
+        f"{('not reached in [0.5, 1.5 MHz]' if f6db is None else f'{f6db:.2f} MHz')}</b>.</li>"
+        "</ul>"
+    )
+
+    return (
+        f"<div class='color-panel'>"
+        f"<h3>{_h.escape(cap_name)}</h3>"
+        f"<table class='color-table'>"
+        f"<tr>{_th('Burst', 'Which Y/C timing burst.')}"
+        f"{_th('Chroma modulation', 'Single-frame chroma modulation at the burst frequency. Per-frame values shown alongside for reference; small variations between frames are sampling noise, not a defect.')}"
+        f"{_th('Dot-crawl wiggle (mean)', 'Mean pixel-wise std-dev of luma across the captured frames inside the burst, as a percent of full luma swing. A perfectly-stable image gives ~0 here; non-zero is decoder-injected dot-crawl moving between fields.')}"
+        f"{_th('Dot-crawl wiggle (peak)', 'Single-pixel maximum of the same std-dev — flags hotspots of frame-to-frame motion that may not dominate the average.')}"
+        f"{_th('Verdict', 'Plain-language summary.')}"
+        f"</tr>"
+        + "".join(rows_html) +
+        f"</table>"
+        f"<h4>Summary</h4>{summary_html}"
+        f"</div>"
+    )
+
+
+def render_yc_timing_panels(captures: List[Dict[str, Any]]) -> str:
+    if not any(c.get("yc_timing") for c in captures):
+        return ""
+    intro = """
+<p class="legend">
+  Row 9 of the chart carries three alternating-chroma stripe patterns:
+  blue/yellow at 0.5 MHz (cells 9,6 + 9,7) and red/cyan at 1.0 MHz
+  (cell 9,5) and 1.5 MHz (cell 9,8). The stripes are designed so that
+  Y and C transition at the same x-position — a Y/C-timing-aligned
+  decoder reproduces the stripes cleanly while a misaligned one
+  shifts the colors away from the luma edges.
+</p>
+<p class="legend">
+  <b>Why multi-frame analysis?</b> Many composite-NTSC decoders inject
+  a small luma pattern at the color-subcarrier frequency at every
+  chroma transition (the dot-crawl artifact). Because the subcarrier
+  phase advances by ≈ 162° from one frame to the next on NTSC, that
+  injected pattern <i>moves</i> between successive frames — the
+  classic shimmering dots that crawl up vertical color edges. A
+  single-frame measurement misses this motion entirely. We sample
+  the bursts on 3 consecutive frames and compute the pixel-wise
+  std-dev of luma across the stack; a static, well-decoded image
+  gives ~0, while a decoder with cross-luma produces a clearly non-
+  zero number.
+</p>
+<p class="legend">
+  We also derive a <b>chroma bandwidth</b> proxy: interpolated -3 dB
+  and -6 dB crossings on the 0.5/1.0/1.5 MHz chroma-magnitude curve.
+  Wider bandwidth → the decoder preserves higher-frequency chroma
+  detail (smoother color transitions and more saturated narrow
+  features).
+</p>
+"""
+    panels = [_render_yc_timing_panel(c) for c in captures]
+    return f"""
+<section class="yc-timing-panels">
+  <h2>Y/C Timing — dot-crawl wiggle &amp; chroma bandwidth</h2>
+  {intro}
+  {''.join(panels)}
 </section>
 """
 
@@ -2686,7 +2965,8 @@ code { color: #c5d1e0; }
 .diag-panel h3 { margin: 4px 0 8px 0; font-size: 14px; }
 .diag-zoom-readout { font-size: 11px; color: #8a929f; font-weight: 400; margin-left: 6px; }
 .diag-zoom-container { position: relative; overflow: hidden; cursor: grab; outline: none;
-    border: 1px solid #2a2e36; background: #000; width: 100%; height: 720px; }
+    border: 1px solid #2a2e36; background: #000; width: 720px; height: 540px;
+    max-width: 100%; }
 .diag-zoom-container:focus { outline: 1px solid #61c08f; }
 .diag-img { display: block; max-width: none; transform-origin: 0 0; image-rendering: pixelated;
     user-select: none; -webkit-user-drag: none; }
@@ -3478,6 +3758,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_chroma_staircase_overview(captures)
         + render_pulse_overview(captures)
         + render_radial_wedge_overview(captures)
+        + render_yc_timing_overview(captures)
     )
     details = (
         render_geometry_section(captures)
@@ -3488,6 +3769,7 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
         + render_chroma_staircase_panels(captures)
         + render_pulse_panels(captures)
         + render_radial_wedge_panels(captures)
+        + render_yc_timing_panels(captures)
         + render_luma_scale_analysis(captures)
         + render_artifacts(captures)
         + render_decoder_class(captures)
