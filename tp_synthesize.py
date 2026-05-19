@@ -155,58 +155,80 @@ def _draw_chroma_bursts(Y: np.ndarray, U: np.ndarray, V: np.ndarray) -> None:
         V[y:y + h, x // 2:(x + w) // 2] = stripe_v[None, :]
 
 
+def _sin_to_y10(phase: np.ndarray) -> np.ndarray:
+    """Map a sinusoid in [-1, 1] to luma codes spanning [BLACK_Y10,
+    WHITE_Y10]. Produces an antialiased, visually-symmetric stripe
+    pattern with a single FFT peak at the fundamental — the right
+    "perfect" reference for a burst test."""
+    mid = (tp_chart.WHITE_Y10 + tp_chart.BLACK_Y10) / 2.0
+    amp = (tp_chart.WHITE_Y10 - tp_chart.BLACK_Y10) / 2.0
+    return (mid + amp * np.sin(phase)).clip(0, 1023).astype(np.uint16)
+
+
 def _draw_vertical_bursts(Y: np.ndarray) -> None:
     """Render the three vertical-frequency bursts in cells (4..6, 1) —
     slightly-tilted near-horizontal stripes at the chart-spec vertical
-    frequency. These are used to probe vertical-axis resolution
-    (scan converters, deinterlacers, vertical-aperture enhancers)."""
+    frequency. These probe vertical-axis resolution (scan converters,
+    deinterlacers, vertical-aperture enhancers). Rendered as a smooth
+    sinusoid so the reference image is visually symmetric."""
     for r in tp_chart.VERTICAL_BURST_REGIONS:
         x, y, w, h = r["ideal_box"]
-        freq_cpr = r["freq_cycles_per_row"]   # cycles per row
+        freq_cpr = r["freq_cycles_per_row"]
         angle_deg = r.get("stripe_angle_deg", 0.0)
         theta = np.deg2rad(angle_deg)
-        # Stripes have constant phase along (sin θ, cos θ): a near-
-        # horizontal stripe means the phase axis is nearly (0, 1)
-        # (i.e., y). With the small angle θ, the projection axis is
-        # (sin θ, cos θ).
         xs = np.arange(w, dtype=np.float32)
         ys = np.arange(h, dtype=np.float32)
         xx, yy = np.meshgrid(xs, ys)
-        # proj has units of "rows along the perpendicular-to-stripes
-        # axis" — multiply by 2π * freq_cpr to get phase.
         proj = xx * np.sin(theta) + yy * np.cos(theta)
         phase = 2.0 * np.pi * freq_cpr * proj
-        tile = np.where(np.sin(phase) >= 0,
-                        tp_chart.WHITE_Y10,
-                        tp_chart.BLACK_Y10).astype(np.uint16)
-        Y[y:y + h, x:x + w] = tile
+        Y[y:y + h, x:x + w] = _sin_to_y10(phase)
 
 
 def _draw_radial_wedge(Y: np.ndarray) -> None:
     """Render the radial wedge (Siemens-star-style resolution probe) in
-    cell (8,11). N alternating black/white pie wedges between
-    inner_radius and outer_radius around the chart-spec center."""
+    cell (8,11). N smooth wedges between inner_radius and outer_radius
+    around the chart-spec center, rendered at 4× supersampling and
+    box-filtered down so the reference matches the visual appearance
+    of the real chart: wedges visible at outer radii, fading toward
+    grey near the center where they exceed pixel resolution."""
     rw = tp_chart.RADIAL_WEDGE
     cx, cy = rw["center_xy"]
     r_in  = float(rw["inner_radius_px"])
     r_out = float(rw["outer_radius_px"])
     n_pairs = int(rw["n_wedge_pairs"])
     cell_x, cell_y, cell_w, cell_h = rw["cell_box"]
-    # Iterate over pixels of the cell.
-    ys = np.arange(cell_y, cell_y + cell_h)
-    xs = np.arange(cell_x, cell_x + cell_w)
-    xx, yy = np.meshgrid(xs, ys)
+    ss = 4  # supersampling factor (4× linear, 16 sub-samples per pixel)
+    yi = np.arange(cell_h * ss, dtype=np.float32) / ss + cell_y
+    xi = np.arange(cell_w * ss, dtype=np.float32) / ss + cell_x
+    xx, yy = np.meshgrid(xi, yi)
     dx = xx - cx
     dy = yy - cy
     r = np.sqrt(dx * dx + dy * dy)
     theta = np.arctan2(dy, dx)
-    in_wedge = (r >= r_in) & (r <= r_out)
-    # n_pairs around the full circle: 2*n_pairs sign changes per circle.
-    sign = (np.sin(theta * n_pairs) >= 0)
-    tile = np.where(sign, tp_chart.WHITE_Y10, tp_chart.BLACK_Y10).astype(np.uint16)
+    # Smooth wedge profile: sinusoid in angle. Modulation amplitude
+    # tapers smoothly toward the inner / outer radii so the wedge
+    # blends into the grey background instead of having a hard edge.
+    mid = (tp_chart.WHITE_Y10 + tp_chart.BLACK_Y10) / 2.0
+    amp = (tp_chart.WHITE_Y10 - tp_chart.BLACK_Y10) / 2.0
+    in_band = (r >= r_in) & (r <= r_out)
+    # Quarter-cosine taper across a 1-px edge band so the wedge
+    # doesn't have a hard circular boundary.
+    edge = 1.0
+    inner_taper = np.clip((r - r_in) / edge, 0.0, 1.0)
+    outer_taper = np.clip((r_out - r) / edge, 0.0, 1.0)
+    taper = np.minimum(inner_taper, outer_taper)
+    wedge_signal = mid + amp * taper * np.sin(theta * n_pairs)
+    # Outside the band, fall back to the existing pixel content
+    # (grey background from the chart).
     sub = Y[cell_y:cell_y + cell_h, cell_x:cell_x + cell_w]
-    sub_masked = np.where(in_wedge, tile, sub)
-    Y[cell_y:cell_y + cell_h, cell_x:cell_x + cell_w] = sub_masked.astype(np.uint16)
+    sub_ss = np.repeat(np.repeat(sub.astype(np.float32), ss, axis=0),
+                       ss, axis=1)
+    rendered_ss = np.where(in_band, wedge_signal, sub_ss)
+    # Box-filter downsample (mean over each ss×ss block) for antialiasing.
+    rendered = rendered_ss.reshape(cell_h, ss, cell_w, ss).mean(axis=(1, 3))
+    Y[cell_y:cell_y + cell_h, cell_x:cell_x + cell_w] = (
+        rendered.clip(0, 1023).astype(np.uint16)
+    )
 
 
 def _draw_pulse_cells(Y: np.ndarray) -> None:
@@ -261,10 +283,7 @@ def _draw_wedge_column(Y: np.ndarray) -> None:
         period = sample_rate / freq
         xs = np.arange(box_w, dtype=np.float32)
         phase = 2.0 * np.pi * xs / period
-        row = np.where(
-            np.sin(phase) >= 0, tp_chart.WHITE_Y10, tp_chart.BLACK_Y10
-        ).astype(np.uint16)
-        Y[row_y, x0:x0 + box_w] = row
+        Y[row_y, x0:x0 + box_w] = _sin_to_y10(phase)
 
 
 def _draw_bursts(Y: np.ndarray) -> None:
@@ -289,9 +308,7 @@ def _draw_bursts(Y: np.ndarray) -> None:
         if kind == "burst_vertical":
             xs = np.arange(w, dtype=np.float32)
             phase = 2.0 * np.pi * xs / period
-            row = np.where(
-                np.sin(phase) >= 0, tp_chart.WHITE_Y10, tp_chart.BLACK_Y10
-            ).astype(np.uint16)
+            row = _sin_to_y10(phase)
             Y[y:y + h, x:x + w] = row[None, :]
         elif kind == "burst_diagonal":
             theta = np.deg2rad(r["stripe_angle_deg"])
@@ -300,10 +317,7 @@ def _draw_bursts(Y: np.ndarray) -> None:
             xx, yy = np.meshgrid(xs, ys)
             proj = xx * np.cos(theta) + yy * np.sin(theta)
             phase = 2.0 * np.pi * proj / period
-            tile = np.where(
-                np.sin(phase) >= 0, tp_chart.WHITE_Y10, tp_chart.BLACK_Y10
-            ).astype(np.uint16)
-            Y[y:y + h, x:x + w] = tile
+            Y[y:y + h, x:x + w] = _sin_to_y10(phase)
 
 
 def _draw_boundary_triangles(Y: np.ndarray) -> None:

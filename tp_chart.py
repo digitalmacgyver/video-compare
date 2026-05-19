@@ -614,7 +614,10 @@ RADIAL_WEDGE = {
     "center_xy":      (627, 404),             # operator-derived
     "inner_radius_px": 2.0,
     "outer_radius_px": 17.0,
-    "n_wedge_pairs":   16,                    # FFT-derived from real captures
+    "n_wedge_pairs":   20,                    # FFT-derived from real composite
+    # captures (DPS and IQ both show peak_bin=20 consistently across
+    # outer-half radii r=10..17; an earlier value of 16 came from an
+    # aliasing-prone subset of radii).
     # Sampling box used for cross-color and H/V symmetry (kept as-is
     # from ARTIFACT_REGIONS so existing measurements continue to work).
     "sample_box":     (604, 384, 52, 44),

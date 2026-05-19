@@ -934,8 +934,8 @@ def test_overall_summary_includes_wedge_column():
 
 
 def test_measure_radial_wedge_on_synth_resolves_pattern():
-    """Synth radial wedge → measurement detects ~16 pairs and finds a
-    finite resolution limit."""
+    """Synth radial wedge → measurement detects ~20 pairs (the chart-spec
+    N) and finds a finite resolution limit."""
     import tp_synthesize, tp_register, tp_measure
     Y, U, V = tp_synthesize.synthesize()
     M = tp_register.register(Y)["affine_matrix"]
@@ -945,7 +945,7 @@ def test_measure_radial_wedge_on_synth_resolves_pattern():
     res = tp_measure.measure_radial_wedge(
         Y, U, V, np.asarray(M, dtype=np.float32))
     n = res["n_wedge_pairs_detected"]
-    assert n is not None and 12 <= n <= 20, n
+    assert n is not None and 16 <= n <= 24, n
     rl = res["resolution_limit"]
     assert rl["tvl"] is not None and rl["tvl"] > 200, rl
 
