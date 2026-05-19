@@ -404,16 +404,10 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
 
 
 def _yuv10_to_css_rgb(y10: float, u10: float, v10: float) -> str:
-    """Convert a BT.601 limited-range YUV10 triplet to a CSS rgb() string
-    for use as a color swatch. Same conversion as
-    tp_synthesize._yuv422p10_to_bgr8 but on scalars."""
-    y = (float(y10) - tp_chart.BLACK_Y10) / float(tp_chart.Y_RANGE)
-    cb = (float(u10) - tp_chart.CHROMA_CENTER) / 896.0
-    cr = (float(v10) - tp_chart.CHROMA_CENTER) / 896.0
-    r = max(0.0, min(1.0, y + 1.402 * cr))
-    g = max(0.0, min(1.0, y - 0.344136 * cb - 0.714136 * cr))
-    b = max(0.0, min(1.0, y + 1.772 * cb))
-    return f"rgb({int(r * 255)},{int(g * 255)},{int(b * 255)})"
+    """CSS rgb() wrapper around tp_chart.yuv10_to_rgb8 so visual-overview
+    swatches stay bit-for-bit consistent with the rest of the report."""
+    r, g, b = tp_chart.yuv10_to_rgb8(float(y10), float(u10), float(v10))
+    return f"rgb({r},{g},{b})"
 
 
 _TARTAN_LABELS = {
@@ -554,23 +548,38 @@ def _capture_overview_data_url(c: Dict[str, Any], suffix: str) -> str:
 
 
 # Columns shown in the visual frequency-response summary, in order.
-_VISFREQ_COLS = [
-    ("BURST_3p58",        "_overview_burst_3p58.png",
-     "3.58 MHz",
+# Suffix is resolved from tp_overview_crops.output_suffixes() at module
+# load so it stays in lockstep with the sidecar generator — a rename
+# there will fail the assertion below at import rather than silently
+# rendering "—" cells in the report.
+_VISFREQ_LABELS = [
+    ("BURST_3p58",        "3.58 MHz",
      "NTSC color-subcarrier vertical bars. Clean luma bars should look identical."),
-    ("BURST_4p43",        "_overview_burst_4p43.png",
-     "4.43 MHz",
+    ("BURST_4p43",        "4.43 MHz",
      "PAL color-subcarrier vertical bars. On a clean NTSC decoder these should pass through as pure luma."),
-    ("BURST_300TVL_DIAG", "_overview_burst_300TVL.png",
-     "300 TVL diag",
+    ("BURST_300TVL_DIAG", "300 TVL diag",
      "Diagonal stripes at ~3.95 MHz. Tests off-axis resolution and cross-color."),
-    ("BURST_400TVL_DIAG", "_overview_burst_400TVL.png",
-     "400 TVL diag",
+    ("BURST_400TVL_DIAG", "400 TVL diag",
      "Diagonal stripes at ~5.27 MHz — past most analog decoders' design bandwidth."),
-    ("RADIAL_WEDGE",      "_overview_radial.png",
-     "Radial wedge",
+    ("RADIAL_WEDGE",      "Radial wedge",
      "Siemens-star resolution probe. Wedges should fade smoothly to grey near the center; coloured fringing = cross-color."),
 ]
+
+
+def _build_visfreq_cols():
+    import tp_overview_crops
+    suffixes = tp_overview_crops.output_suffixes()
+    cols = []
+    for region_id, label, tip in _VISFREQ_LABELS:
+        if region_id not in suffixes:
+            raise RuntimeError(
+                f"visual-frequency column {region_id} has no matching "
+                f"sidecar suffix in tp_overview_crops.output_suffixes()")
+        cols.append((region_id, suffixes[region_id], label, tip))
+    return cols
+
+
+_VISFREQ_COLS = _build_visfreq_cols()
 
 
 def render_visual_frequency_summary(captures: List[Dict[str, Any]]) -> str:
@@ -604,11 +613,11 @@ def render_visual_frequency_summary(captures: List[Dict[str, Any]]) -> str:
 
     # Reference row.
     ref_cells = ["<td class='visfreq-cap visfreq-ref'>Reference (synth)</td>"]
-    for region_id, _suffix, _label, _tip in _VISFREQ_COLS:
+    for region_id, _suffix, label, _tip in _VISFREQ_COLS:
         url = _synth_cell_url(region_id)
         if url:
             ref_cells.append(
-                f"<td class='visfreq-img'><img src='{url}' alt='{_h.escape(_label)} reference'/></td>"
+                f"<td class='visfreq-img'><img src='{url}' alt='{_h.escape(label)} reference'/></td>"
             )
         else:
             ref_cells.append("<td class='visfreq-img'>—</td>")
@@ -617,11 +626,11 @@ def render_visual_frequency_summary(captures: List[Dict[str, Any]]) -> str:
     # Per-capture rows.
     for c in captures:
         cells = [f"<td class='visfreq-cap'>{_h.escape(_basename(c.get('_source_json_path','')))}</td>"]
-        for _region_id, suffix, _label, _tip in _VISFREQ_COLS:
+        for _region_id, suffix, label, _tip in _VISFREQ_COLS:
             url = _capture_overview_data_url(c, suffix)
             if url:
                 cells.append(
-                    f"<td class='visfreq-img'><img src='{url}' alt='{_h.escape(_label)}'/></td>"
+                    f"<td class='visfreq-img'><img src='{url}' alt='{_h.escape(label)}'/></td>"
                 )
             else:
                 cells.append("<td class='visfreq-img'>—</td>")
