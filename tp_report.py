@@ -70,6 +70,16 @@ def _write_sidecars(capture_path: str, json_path: str,
     except Exception as e:
         print(f"  WARNING: radial-wedge-crops PNG failed: {e}",
               file=sys.stderr)
+    try:
+        import tp_overview_crops
+        import cv2
+        crops = tp_overview_crops.build(capture_path, json_path,
+                                        frame_index)
+        for rid, suffix in tp_overview_crops.output_suffixes().items():
+            cv2.imwrite(stem + suffix, crops[rid])
+    except Exception as e:
+        print(f"  WARNING: overview-crops PNGs failed: {e}",
+              file=sys.stderr)
 
 
 def _ensure_json(capture_path: str, json_path: str, frame_index: int,
@@ -96,11 +106,17 @@ def _ensure_json(capture_path: str, json_path: str, frame_index: int,
         )
     if with_overlays:
         # Only regenerate sidecars that are missing (or always if force).
+        import tp_overview_crops
+        overview_needs = any(
+            not os.path.exists(stem + suffix)
+            for suffix in tp_overview_crops.output_suffixes().values()
+        )
         needs = (force
                  or not os.path.exists(stem + "_overlay.png")
                  or not os.path.exists(stem + "_fiducials.png")
                  or not os.path.exists(stem + "_wedge.png")
-                 or not os.path.exists(stem + "_radial_wedge.png"))
+                 or not os.path.exists(stem + "_radial_wedge.png")
+                 or overview_needs)
         if needs:
             _write_sidecars(capture_path, json_path, frame_index)
     return True

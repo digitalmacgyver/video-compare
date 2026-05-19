@@ -403,6 +403,250 @@ def render_overall_summary(captures: List[Dict[str, Any]]) -> str:
 """
 
 
+def _yuv10_to_css_rgb(y10: float, u10: float, v10: float) -> str:
+    """Convert a BT.601 limited-range YUV10 triplet to a CSS rgb() string
+    for use as a color swatch. Same conversion as
+    tp_synthesize._yuv422p10_to_bgr8 but on scalars."""
+    y = (float(y10) - tp_chart.BLACK_Y10) / float(tp_chart.Y_RANGE)
+    cb = (float(u10) - tp_chart.CHROMA_CENTER) / 896.0
+    cr = (float(v10) - tp_chart.CHROMA_CENTER) / 896.0
+    r = max(0.0, min(1.0, y + 1.402 * cr))
+    g = max(0.0, min(1.0, y - 0.344136 * cb - 0.714136 * cr))
+    b = max(0.0, min(1.0, y + 1.772 * cb))
+    return f"rgb({int(r * 255)},{int(g * 255)},{int(b * 255)})"
+
+
+_TARTAN_LABELS = {
+    "YEL":  "Yel",  "CYN":  "Cyn",  "BLU":  "Blu",  "RED":  "Red",
+    "MAG":  "Mag",  "GRN":  "Grn",  "RED2": "Red²", "CYN2": "Cyn²",
+}
+_GRAY_LABELS = {
+    "G1": "20 %",  "G2": "40 %",  "G3": "60 %",  "G4": "80 %",
+}
+
+
+def render_visual_color_summary(captures: List[Dict[str, Any]]) -> str:
+    """Compact side-by-side color swatch table: each cell shows the
+    capture's measured color next to the chart reference. Lets a reader
+    eyeball color shift without parsing ΔE numbers."""
+    if not captures:
+        return ""
+    tartan_ids = [r["id"] for r in tp_chart.TARTAN_REGIONS]
+    gray_ids   = [r["id"] for r in tp_chart.GRAY_REGIONS]
+    if not any(c.get("tartan") for c in captures) and \
+       not any(c.get("grays") for c in captures):
+        return ""
+
+    def _tartan_index(c):
+        return {r["id"]: r for r in (c.get("tartan") or [])}
+
+    def _gray_index(c):
+        return {r["id"]: r for r in (c.get("grays") or [])}
+
+    # Reference swatches (from any capture — ideal values are chart-spec
+    # constants, identical across all captures).
+    ref_tartan = {}
+    ref_gray = {}
+    for c in captures:
+        for r in (c.get("tartan") or []):
+            ref_tartan.setdefault(r["id"], r.get("ideal_yuv10"))
+        for r in (c.get("grays") or []):
+            ref_gray.setdefault(r["id"], r.get("ideal_y10"))
+
+    def _ref_swatch_tartan(rid):
+        v = ref_tartan.get(rid)
+        if v is None:
+            return "rgb(128,128,128)"
+        return _yuv10_to_css_rgb(v[0], v[1], v[2])
+
+    def _ref_swatch_gray(rid):
+        v = ref_gray.get(rid)
+        if v is None:
+            return "rgb(128,128,128)"
+        return _yuv10_to_css_rgb(v, tp_chart.CHROMA_CENTER,
+                                 tp_chart.CHROMA_CENTER)
+
+    head_cells = ["<th class='visrow-cap'>Capture</th>"]
+    for rid in tartan_ids:
+        head_cells.append(
+            f"<th class='visrow-color'>{_h.escape(_TARTAN_LABELS.get(rid, rid))}"
+            f"<div class='visrow-refswatch' style='background:{_ref_swatch_tartan(rid)}'></div>"
+            f"</th>"
+        )
+    for rid in gray_ids:
+        head_cells.append(
+            f"<th class='visrow-color'>{_h.escape(_GRAY_LABELS.get(rid, rid))}"
+            f"<div class='visrow-refswatch' style='background:{_ref_swatch_gray(rid)}'></div>"
+            f"</th>"
+        )
+    head = "<tr>" + "".join(head_cells) + "</tr>"
+
+    rows = []
+    for c in captures:
+        ti = _tartan_index(c)
+        gi = _gray_index(c)
+        cells = [f"<td class='visrow-cap'>{_h.escape(_basename(c.get('_source_json_path','')))}</td>"]
+        for rid in tartan_ids:
+            entry = ti.get(rid)
+            ref_css = _ref_swatch_tartan(rid)
+            if entry and entry.get("measured_yuv10"):
+                m = entry["measured_yuv10"]
+                meas_css = _yuv10_to_css_rgb(m[0], m[1], m[2])
+            else:
+                meas_css = ref_css
+            cells.append(
+                f"<td class='visrow-pair'>"
+                f"<div class='swatch' style='background:{meas_css}'></div>"
+                f"<div class='swatch' style='background:{ref_css}'></div>"
+                f"</td>"
+            )
+        for rid in gray_ids:
+            entry = gi.get(rid)
+            ref_css = _ref_swatch_gray(rid)
+            if entry and entry.get("measured_y10") is not None:
+                m_y = entry["measured_y10"]
+                m_u = entry.get("u10", tp_chart.CHROMA_CENTER)
+                m_v = entry.get("v10", tp_chart.CHROMA_CENTER)
+                meas_css = _yuv10_to_css_rgb(m_y, m_u, m_v)
+            else:
+                meas_css = ref_css
+            cells.append(
+                f"<td class='visrow-pair'>"
+                f"<div class='swatch' style='background:{meas_css}'></div>"
+                f"<div class='swatch' style='background:{ref_css}'></div>"
+                f"</td>"
+            )
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+
+    return f"""
+<section class="visual-overview">
+  <h2>Color &amp; grayscale — at a glance</h2>
+  <p class="legend">
+    Each cell shows the capture's measured patch on the left and the
+    chart reference on the right, side-by-side with no border so the
+    eye can pick up subtle hue or brightness shifts. Tartan columns
+    are the 8 saturated 75 % color patches; the four grays are the
+    20/40/60/80 % luminance steps. The small swatch under each column
+    header is the reference color for that column.
+  </p>
+  <table class="visual-color-summary">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
+def _capture_overview_data_url(c: Dict[str, Any], suffix: str) -> str:
+    """Embed a per-capture overview sidecar PNG as a base64 data URL.
+    `suffix` is one of tp_overview_crops.output_suffixes() values."""
+    import base64
+    src = c.get("_source_json_path")
+    if not src:
+        return ""
+    stem = os.path.splitext(src)[0]
+    path = stem + suffix
+    if not os.path.exists(path):
+        return ""
+    with open(path, "rb") as f:
+        return ("data:image/png;base64,"
+                + base64.b64encode(f.read()).decode("ascii"))
+
+
+# Columns shown in the visual frequency-response summary, in order.
+_VISFREQ_COLS = [
+    ("BURST_3p58",        "_overview_burst_3p58.png",
+     "3.58 MHz",
+     "NTSC color-subcarrier vertical bars. Clean luma bars should look identical."),
+    ("BURST_4p43",        "_overview_burst_4p43.png",
+     "4.43 MHz",
+     "PAL color-subcarrier vertical bars. On a clean NTSC decoder these should pass through as pure luma."),
+    ("BURST_300TVL_DIAG", "_overview_burst_300TVL.png",
+     "300 TVL diag",
+     "Diagonal stripes at ~3.95 MHz. Tests off-axis resolution and cross-color."),
+    ("BURST_400TVL_DIAG", "_overview_burst_400TVL.png",
+     "400 TVL diag",
+     "Diagonal stripes at ~5.27 MHz — past most analog decoders' design bandwidth."),
+    ("RADIAL_WEDGE",      "_overview_radial.png",
+     "Radial wedge",
+     "Siemens-star resolution probe. Wedges should fade smoothly to grey near the center; coloured fringing = cross-color."),
+]
+
+
+def render_visual_frequency_summary(captures: List[Dict[str, Any]]) -> str:
+    """At-a-glance grid: reference row on top, then one row per capture,
+    each showing the 4× upscaled crops of the key frequency-response
+    cells. Lets a reader eyeball how each processor handles each
+    pattern relative to the synth reference."""
+    if not captures:
+        return ""
+    # Reference row uses synth crops generated inline.
+    try:
+        bgr = _synth_frame_bgr()
+    except Exception:
+        bgr = None
+
+    def _synth_cell_url(region_id: str) -> str:
+        if bgr is None:
+            return ""
+        if region_id == "RADIAL_WEDGE":
+            cell = tp_chart.RADIAL_WEDGE["cell_box"]
+            return _bgr_crop_to_png_data_url(bgr, cell, upscale=4)
+        box = _burst_box_for(region_id)
+        if box is None:
+            return ""
+        return _bgr_crop_to_png_data_url(bgr, box, upscale=4)
+
+    head_cells = ["<th class='visfreq-cap'>Source</th>"]
+    for _, _, label, tip in _VISFREQ_COLS:
+        head_cells.append(_th(label, tip))
+    head = "<tr>" + "".join(head_cells) + "</tr>"
+
+    # Reference row.
+    ref_cells = ["<td class='visfreq-cap visfreq-ref'>Reference (synth)</td>"]
+    for region_id, _suffix, _label, _tip in _VISFREQ_COLS:
+        url = _synth_cell_url(region_id)
+        if url:
+            ref_cells.append(
+                f"<td class='visfreq-img'><img src='{url}' alt='{_h.escape(_label)} reference'/></td>"
+            )
+        else:
+            ref_cells.append("<td class='visfreq-img'>—</td>")
+    rows = ["<tr class='visfreq-refrow'>" + "".join(ref_cells) + "</tr>"]
+
+    # Per-capture rows.
+    for c in captures:
+        cells = [f"<td class='visfreq-cap'>{_h.escape(_basename(c.get('_source_json_path','')))}</td>"]
+        for _region_id, suffix, _label, _tip in _VISFREQ_COLS:
+            url = _capture_overview_data_url(c, suffix)
+            if url:
+                cells.append(
+                    f"<td class='visfreq-img'><img src='{url}' alt='{_h.escape(_label)}'/></td>"
+                )
+            else:
+                cells.append("<td class='visfreq-img'>—</td>")
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+
+    return f"""
+<section class="visual-overview">
+  <h2>Frequency response — at a glance</h2>
+  <p class="legend">
+    Each row is a capture; each column is a critical test cell from
+    the chart. The top row is the synthesized reference — what a
+    clean signal path produces. Compare each capture row against the
+    reference to see at a glance which processors keep the pattern
+    intact and which lose modulation, blur, or introduce cross-color
+    fringes. The numerical breakdown for each cell is in the detail
+    sections below.
+  </p>
+  <table class="visual-frequency-summary">
+    <thead>{head}</thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+"""
+
+
 def render_geometry_overview(captures: List[Dict[str, Any]]) -> str:
     head = (
         "<tr>"
@@ -3555,6 +3799,44 @@ dl.metric-key dt { color: #f0b450; font-weight: 600; margin-top: 8px; }
 dl.metric-key dd { margin: 2px 0 0 16px; color: #c5d1e0; }
 .radial-wedge-fig figcaption { font-size: 11px; color: #b8c0cc;
     margin-top: 4px; max-width: 480px; }
+section.visual-overview { margin: 16px 0 8px; }
+section.visual-overview h2 { margin-bottom: 4px; }
+section.visual-overview p.legend { margin-top: 4px; }
+table.visual-color-summary { border-collapse: collapse; margin-top: 8px;
+    font-size: 12px; color: #c5d1e0; }
+table.visual-color-summary th, table.visual-color-summary td {
+    border: none; padding: 3px 4px; vertical-align: middle; }
+table.visual-color-summary th.visrow-cap { text-align: left;
+    color: #c5d1e0; font-weight: 600; min-width: 220px; }
+table.visual-color-summary th.visrow-color { font-weight: 500;
+    color: #9aa5b4; text-align: center; padding: 2px 6px; }
+table.visual-color-summary td.visrow-cap { color: #c5d1e0; font-weight: 500;
+    white-space: nowrap; padding-right: 8px; }
+table.visual-color-summary td.visrow-pair { padding: 0; line-height: 0; }
+table.visual-color-summary td.visrow-pair .swatch {
+    display: inline-block; width: 18px; height: 22px; margin: 0;
+    padding: 0; border: 0; vertical-align: middle; }
+table.visual-color-summary .visrow-refswatch {
+    display: block; width: 18px; height: 6px; margin: 2px auto 0;
+    border-radius: 1px; }
+table.visual-color-summary tbody tr:nth-child(odd) { background: #181b21; }
+table.visual-frequency-summary { border-collapse: collapse; margin-top: 8px;
+    font-size: 12px; color: #c5d1e0; }
+table.visual-frequency-summary th, table.visual-frequency-summary td {
+    border: 1px solid #2a2e36; padding: 4px; vertical-align: middle;
+    text-align: center; background: #14161a; }
+table.visual-frequency-summary th.visfreq-cap { text-align: left;
+    min-width: 220px; }
+table.visual-frequency-summary td.visfreq-cap { text-align: left;
+    color: #c5d1e0; font-weight: 500; min-width: 220px;
+    background: #1a1d24; white-space: nowrap; }
+table.visual-frequency-summary td.visfreq-ref { color: #f0b450;
+    font-weight: 600; }
+table.visual-frequency-summary tr.visfreq-refrow td { background: #1d2026; }
+table.visual-frequency-summary td.visfreq-img { padding: 2px; }
+table.visual-frequency-summary td.visfreq-img img {
+    display: block; image-rendering: pixelated; max-width: 160px;
+    max-height: 160px; margin: 0 auto; background: #14161a; }
 """
 
 
@@ -4313,6 +4595,8 @@ def render_page(captures: List[Dict[str, Any]]) -> str:
     #   chroma Y/C: Y/C Timing → Zone Plate
     overviews = (
         render_overall_summary(captures)
+        + render_visual_color_summary(captures)
+        + render_visual_frequency_summary(captures)
         + render_geometry_overview(captures)
         + render_tartan_overview(captures)
         + render_chroma_staircase_overview(captures)

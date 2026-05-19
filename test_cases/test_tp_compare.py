@@ -396,6 +396,40 @@ def test_render_frequency_response_overview_handles_missing_data():
     assert "Frequency Response Overview" in html
 
 
+def test_render_visual_color_summary_emits_paired_swatches():
+    a = _make_capture_json("alpha"); a["_source_json_path"] = "/x/alpha.json"
+    b = _make_capture_json("beta");  b["_source_json_path"] = "/x/beta.json"
+    html = tp_compare.render_visual_color_summary([a, b])
+    assert "Color &amp; grayscale" in html
+    # Two swatches per cell (measured + reference)
+    assert html.count("class='swatch'") >= 4  # 2 captures × 1 tartan × 2
+    # Reference column-header swatches
+    assert "visrow-refswatch" in html
+    # Per-capture row labels show up
+    assert "alpha.json" in html and "beta.json" in html
+
+
+def test_render_visual_color_summary_handles_no_color_data():
+    a = {"_meta": {}, "_source_json_path": "/x/a.json"}
+    assert tp_compare.render_visual_color_summary([a]) == ""
+
+
+def test_render_visual_frequency_summary_emits_reference_row():
+    a = _make_capture_json("alpha")
+    html = tp_compare.render_visual_frequency_summary([a])
+    assert "Frequency response — at a glance" in html
+    # Reference row label
+    assert "Reference (synth)" in html
+    # Column headers
+    assert "3.58 MHz" in html and "Radial wedge" in html
+    # Synth reference images are inlined as data URLs
+    assert "data:image/png;base64" in html
+
+
+def test_render_visual_frequency_summary_handles_empty():
+    assert tp_compare.render_visual_frequency_summary([]) == ""
+
+
 def test_render_frequency_response_section_includes_intro_and_reference():
     a = _make_capture_json_with_geometry("alpha")
     a["frequency_response"] = {
@@ -1300,6 +1334,10 @@ TESTS_NO_TMPDIR = [
     test_overall_summary_legend_key_describes_all_columns,
     test_measure_vertical_response_on_synth_resolves_bursts,
     test_render_page_places_registration_summary_in_appendix,
+    test_render_visual_color_summary_emits_paired_swatches,
+    test_render_visual_color_summary_handles_no_color_data,
+    test_render_visual_frequency_summary_emits_reference_row,
+    test_render_visual_frequency_summary_handles_empty,
 ]
 TESTS_TMPDIR = [test_compare_cli_writes_html]
 
